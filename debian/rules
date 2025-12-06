@@ -1,0 +1,15 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	$(MAKE) all
+
+override_dh_auto_install:
+	mkdir -p debian/montecarlo/usr/bin
+	mkdir -p debian/montecarlo/usr/share/montecarlo
+	install -m 755 daemon debian/montecarlo/usr/bin/montecarlo-daemon
+	install -m 755 worker debian/montecarlo/usr/bin/montecarlo-worker
+	install -m 755 montecarlo_cli debian/montecarlo/usr/bin/montecarlo-cli
+	install -m 755 ui.py debian/montecarlo/usr/share/montecarlo/ui.py
