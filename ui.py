@@ -66,39 +66,7 @@ class MontecarloUI(Gtk.Window):
         lbl_root = Gtk.Label(label="Manual Driver Management (Root)")
         self.page_root.pack_start(lbl_root, False, False, 5)
         
-        # TreeView for drivers
-        self.store = Gtk.ListStore(str, str) # Driver Name, Status (Loaded/Unloaded - simplification)
-        self.tree = Gtk.TreeView(model=self.store)
-        
-        renderer = Gtk.CellRendererText()
-        column = Gtk.TreeViewColumn("Driver Name", renderer, text=0)
-        self.tree.append_column(column)
-        
-        # Selection
-        self.selection = self.tree.get_selection()
-        
-        scrolled_root = Gtk.ScrolledWindow()
-        scrolled_root.set_hexpand(True)
-        scrolled_root.set_vexpand(True)
-        scrolled_root.add(self.tree)
-        self.page_root.pack_start(scrolled_root, True, True, 0)
-        
-        bbox = Gtk.ButtonBox(orientation=Gtk.Orientation.HORIZONTAL)
-        bbox.set_layout(Gtk.ButtonBoxStyle.CENTER)
-        
-        btn_refresh = Gtk.Button(label="Refresh List")
-        btn_refresh.connect("clicked", self.on_refresh_clicked)
-        bbox.add(btn_refresh)
-        
-        btn_load = Gtk.Button(label="Load Selected")
-        btn_load.connect("clicked", self.on_load_clicked)
-        bbox.add(btn_load)
-        
-        btn_unload = Gtk.Button(label="Unload Selected")
-        btn_unload.connect("clicked", self.on_unload_clicked)
-        bbox.add(btn_unload)
-        
-        self.page_root.pack_start(bbox, False, False, 5)
+        self.setup_root_ui()
         
         self.notebook.append_page(self.page_root, Gtk.Label(label="Root Mode"))
         
@@ -157,38 +125,157 @@ class MontecarloUI(Gtk.Window):
 
     # --- ROOT MODE HANDLERS ---
     def refresh_drivers(self):
-        self.store.clear()
+        self.store_available.clear()
+        self.store_loaded.clear()
+        
+        # 1. Get all potential drivers from disk (simplification: scan usb/hid dirs)
+        candidates = self.scan_disk_drivers()
+        
+        # 2. Get currently loaded drivers
+        loaded = self.get_loaded_modules()
+        
+        for drv in candidates:
+            # Check if loaded
+            # Note: module names in lsmod often use underscores instead of dashes
+            normalized_drv = drv.replace("-", "_")
+            is_loaded = any(l.replace("-", "_") == normalized_drv for l in loaded)
+            
+            if is_loaded:
+                 self.store_loaded.append([drv])
+            else:
+                 self.store_available.append([drv])
+
+    def scan_disk_drivers(self):
+        drivers = set()
+        # Scan standard kernel paths for USB/HID drivers
+        # This is a heuristic.
+        import platform
+        kernel_ver = platform.release()
+        base_path = f"/lib/modules/{kernel_ver}/kernel/drivers"
+        paths = [
+            os.path.join(base_path, "usb"),
+            os.path.join(base_path, "hid")
+        ]
+        
+        for p in paths:
+            if not os.path.exists(p): continue
+            for root, dirs, files in os.walk(p):
+                for f in files:
+                    if f.endswith(".ko") or f.endswith(".ko.xz"):
+                        # Extract module name
+                        name = f.split(".")[0]
+                        drivers.add(name)
+        # Also include generic candidates from CLI list just in case
         try:
             output = subprocess.check_output([CLI_PATH, "list"], universal_newlines=True)
-            # Simple parsing of the JSON-like list output by our CLI
-            # Expected: [ "driver1", "driver2" ]
-            # We can use simple string manipulation or json lib if strict valid json
             import json
-            try:
-                drivers = json.loads(output)
-                for d in drivers:
-                    self.store.append([d, "Unknown"])
-            except json.JSONDecodeError:
-                # Fallback if text format changes
-                 pass
-        except Exception as e:
-            print(f"Error listing drivers: {e}")
+            candidates = json.loads(output)
+            for c in candidates:
+                drivers.add(c)
+        except:
+            pass
+            
+        return sorted(list(drivers))
 
-    def on_refresh_clicked(self, widget):
-        self.refresh_drivers()
+    def get_loaded_modules(self):
+        loaded = []
+        try:
+            with open("/proc/modules", "r") as f:
+                for line in f:
+                    # module_name size refcount dependencies state offset
+                    loaded.append(line.split(" ")[0])
+        except:
+             pass
+        return loaded
+
+    def setup_root_ui(self):
+         # Creating Double Pane UI
+         self.store_available = Gtk.ListStore(str)
+         self.store_loaded = Gtk.ListStore(str)
+         
+         grid = Gtk.Grid()
+         grid.set_column_spacing(10)
+         grid.set_row_spacing(10)
+         grid.set_hexpand(True)
+         grid.set_vexpand(True)
+         
+         # Left Pane: Available
+         frame_avail = Gtk.Frame(label="Available (Unloaded)")
+         frame_avail.set_shadow_type(Gtk.ShadowType.ETCHED_IN)
+         
+         self.tree_avail = Gtk.TreeView(model=self.store_available)
+         col_avail = Gtk.TreeViewColumn("Driver", Gtk.CellRendererText(), text=0)
+         self.tree_avail.append_column(col_avail)
+         
+         scroll_avail = Gtk.ScrolledWindow()
+         scroll_avail.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+         scroll_avail.add(self.tree_avail)
+         scroll_avail.set_hexpand(True)
+         scroll_avail.set_vexpand(True)
+         
+         frame_avail.add(scroll_avail)
+         grid.attach(frame_avail, 0, 0, 1, 1)
+         
+         # Center: Buttons
+         bbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+         bbox.set_valign(Gtk.Align.CENTER)
+         
+         btn_load = Gtk.Button(label="Load >>")
+         btn_load.connect("clicked", self.on_load_clicked)
+         bbox.pack_start(btn_load, False, False, 0)
+         
+         btn_unload = Gtk.Button(label="<< Unload")
+         btn_unload.connect("clicked", self.on_unload_clicked)
+         bbox.pack_start(btn_unload, False, False, 0)
+         
+         grid.attach(bbox, 1, 0, 1, 1)
+         
+         # Right Pane: Loaded
+         frame_loaded = Gtk.Frame(label="Active (Loaded)")
+         frame_loaded.set_shadow_type(Gtk.ShadowType.ETCHED_IN)
+         
+         self.tree_loaded = Gtk.TreeView(model=self.store_loaded)
+         col_loaded = Gtk.TreeViewColumn("Driver", Gtk.CellRendererText(), text=0)
+         self.tree_loaded.append_column(col_loaded)
+         
+         scroll_loaded = Gtk.ScrolledWindow()
+         scroll_loaded.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+         scroll_loaded.add(self.tree_loaded)
+         scroll_loaded.set_hexpand(True)
+         scroll_loaded.set_vexpand(True)
+         
+         frame_loaded.add(scroll_loaded)
+         grid.attach(frame_loaded, 2, 0, 1, 1)
+         
+         self.page_root.pack_start(grid, True, True, 0)
+         
+         # Refresh Button Area
+         btn_refresh = Gtk.Button(label="Refresh All")
+         btn_refresh.connect("clicked", lambda w: self.refresh_drivers())
+         self.page_root.pack_start(btn_refresh, False, False, 5)
+
+         # Selection references
+         self.sel_avail = self.tree_avail.get_selection()
+         self.sel_loaded = self.tree_loaded.get_selection()
 
     def on_load_clicked(self, widget):
-        model, treeiter = self.selection.get_selected()
-        if treeiter:
-            driver = model[treeiter][0]
-            self.run_root_cmd("load", driver)
+        model, treeiter = self.sel_avail.get_selected()
+        if not treeiter: return
+        driver = model[treeiter][0]
+        
+        self.run_root_cmd("load", driver)
+        self.refresh_drivers()
 
     def on_unload_clicked(self, widget):
-        model, treeiter = self.selection.get_selected()
-        if treeiter:
-            driver = model[treeiter][0]
-            self.run_root_cmd("unload", driver)
-            
+        model, treeiter = self.sel_loaded.get_selected()
+        if not treeiter: return
+        driver = model[treeiter][0]
+        
+        self.run_root_cmd("unload", driver)
+        self.refresh_drivers()
+
+
+
     def run_root_cmd(self, action, driver):
         try:
             subprocess.run([CLI_PATH, action, driver], check=True)
