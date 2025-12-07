@@ -109,7 +109,7 @@ void mc_run(const char *syspath)
             continue;
         }
 
-        sleep(1); /* Allow kernel time to register driver */
+        sleep(1); /* Allow kernel time to register driver - i know this is a magic number :p*/
 
         /* 1) Fast Check (Sysfs binding) */
         if (mc_dev_has_driver(syspath))
@@ -136,9 +136,9 @@ void mc_run(const char *syspath)
     }
 
     /* --------------------------------------------------------- */
-    /* IF WE REACH HERE, NO DRIVER WORKED                        */
+    /* IF WE REACH HERE, NO DRIVER WORKED and this is terrible                        */
     /* --------------------------------------------------------- */
-    printf("[mc] No compatible driver found.\n");
+    printf("[mc] No compatible driver found :-(.\n");
 
     udev_device_unref(dev);
     udev_unref(udev);

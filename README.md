@@ -9,15 +9,15 @@ The system consists of three main components: a C Daemon, a Python UI, and a Sha
 ```mermaid
 graph TD
     subgraph Kernel Space
-        UD[UDev Events] --> Daemon
-        Drivers[Kernel Drivers]
+        UD["UDev Events"] --> Daemon
+        Drivers["Kernel Drivers"]
     end
 
     subgraph User Space
-        Daemon[Daemon Service<br>(C / Systemd)]
-        Socket((Unix Socket<br>/tmp/montecarlo.sock))
-        UI[User Interface<br>(Python / GTK)]
-        Lib[Shared Library<br>(libmontecarlo.so)]
+        Daemon["Daemon Service<br>(C / Systemd)"]
+        Socket(("Unix Socket<br>/tmp/montecarlo.sock"))
+        UI["User Interface<br>(Python / GTK)"]
+        Lib["Shared Library<br>(libmontecarlo.so)"]
     end
 
     Daemon -->|Listens| UD
