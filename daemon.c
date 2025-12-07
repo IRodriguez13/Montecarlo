@@ -3,167 +3,173 @@
 #include <string.h>
 #include <unistd.h>
 #include <libudev.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <errno.h>
 
-#include "heads/dev.h"
-#include "heads/cache.h"
-// #include "heads/montecarlo.h"
+#include "heads/libmontecarlo.h"
 
-// ----------------------------------------------------------
-//  SPAWN WORKER
-// ----------------------------------------------------------
-static int run_worker_and_parse_json(const char *syspath)
-{
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "./worker \"%s\"", syspath);
+#define SOCKET_PATH "/tmp/montecarlo.sock"
 
-    FILE *p = popen(cmd, "r");
-    if (!p)
-    {
-        fprintf(stderr, "[daemon] error ejecutando worker\n");
+static int server_fd = -1;
+static char current_syspath[1024] = {0};
+
+// Cleanup on exit
+void cleanup(int signum) {
+    (void)signum;
+    if (server_fd != -1) {
+        close(server_fd);
+    }
+    unlink(SOCKET_PATH);
+    exit(0);
+}
+
+// Initialize Unix Socket
+int init_socket() {
+    struct sockaddr_un addr;
+
+    if ((server_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
+        perror("[daemon] socket error");
         return -1;
     }
 
-    char jsonbuf[4096] = {0};
-    size_t n = fread(jsonbuf, 1, sizeof(jsonbuf) - 1, p);
-    jsonbuf[n] = '\0';
-    pclose(p);
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, SOCKET_PATH, sizeof(addr.sun_path) - 1);
 
-    printf("[daemon] worker returned JSON:\n%s\n", jsonbuf);
+    unlink(SOCKET_PATH);
 
-    // // Guardar en el cache
-    // cache_save(jsonbuf);
+    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
+        perror("[daemon] bind error");
+        return -1;
+    }
 
-    // EXTRAER DRIVER
-    // ----------------------------------------------------------------
-    //  simple parser: buscamos "\"driver\":\"XXXX\""
-    //  después lo hacés en serio con jansson / cJSON
-    // ----------------------------------------------------------------
-    const char *pdrv = strstr(jsonbuf, "\"driver\"");
-    if (!pdrv)
-        return 0;
+    if (listen(server_fd, 5) == -1) {
+        perror("[daemon] listen error");
+        return -1;
+    }
+    
+    // Allow anyone to connect for this demo (or restrict to root/group)
+    chmod(SOCKET_PATH, 0666);
 
-    const char *colon = strchr(pdrv, ':');
-    if (!colon)
-        return 0;
-
-    const char *quote1 = strchr(colon, '"');
-    if (!quote1)
-        return 0;
-
-    const char *quote2 = strchr(quote1 + 1, '"');
-    if (!quote2)
-        return 0;
-
-    char driver[128] = {0};
-    size_t len = quote2 - (quote1 + 1);
-    if (len >= sizeof(driver))
-        len = sizeof(driver) - 1;
-
-    memcpy(driver, quote1 + 1, len);
-    driver[len] = '\0';
-
-    printf("[daemon] worker → driver detectado: %s\n", driver);
-
-    // retornamos el driver en forma de hash simple
-    // - 0 significa "none"
-    // - 1 significa "hay driver"
-    return (strcmp(driver, "none") == 0) ? 0 : 1;
+    return 0;
 }
 
-// ----------------------------------------------------------
-//  MAIN LOOP
-// ----------------------------------------------------------
+// Handle client connection (Simple: Accept, Send Syspath, Close)
+// In a real app we might keep connection open, but here we just need to pass the arg.
+void handle_client() {
+    struct sockaddr_un client_addr;
+    socklen_t len = sizeof(client_addr);
+    int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &len);
+    if (client_fd == -1) return;
+
+    // Send current syspath
+    if (current_syspath[0] != '\0') {
+        char buf[1024];
+        snprintf(buf, sizeof(buf), "{\"event\": \"add\", \"syspath\": \"%s\"}", current_syspath);
+        send(client_fd, buf, strlen(buf), 0);
+    } else {
+        const char *msg = "{\"event\": \"none\"}";
+        send(client_fd, msg, strlen(msg), 0);
+    }
+
+    close(client_fd);
+}
+
 int main()
 {
-    printf("[daemon] iniciado\n");
+    printf("[daemon] Starting Montecarlo Daemon...\n");
 
-    struct udev *udev = udev_new();
-    if (!udev)
-    {
-        fprintf(stderr, "[daemon] error creando udev\n");
+    signal(SIGINT, cleanup);
+    signal(SIGTERM, cleanup);
+
+    if (init_socket() == -1) {
+        fprintf(stderr, "[daemon] Failed to init socket\n");
         return 1;
     }
 
-    struct udev_monitor *mon =
-        udev_monitor_new_from_netlink(udev, "udev");
+    struct udev *udev = udev_new();
+    if (!udev) {
+        fprintf(stderr, "[daemon] udev_new failed\n");
+        return 1;
+    }
 
-    if (!mon)
-    {
-        fprintf(stderr, "[daemon] error creando monitor udev\n");
-        udev_unref(udev);
+    struct udev_monitor *mon = udev_monitor_new_from_netlink(udev, "udev");
+    if (!mon) {
+        fprintf(stderr, "[daemon] udev_monitor failed\n");
         return 1;
     }
 
     udev_monitor_filter_add_match_subsystem_devtype(mon, "usb", NULL);
     udev_monitor_enable_receiving(mon);
 
-    printf("[daemon] escuchando eventos USB...\n");
+    int udev_fd = udev_monitor_get_fd(mon);
 
-    while (1)
-    {
-        struct udev_device *dev = udev_monitor_receive_device(mon);
-        if (!dev)
-            continue;
+    printf("[daemon] Listening on %s and UDev...\n", SOCKET_PATH);
 
-        const char *action = udev_device_get_action(dev);
-        const char *syspath = udev_device_get_syspath(dev);
+    while (1) {
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(server_fd, &fds);
+        FD_SET(udev_fd, &fds);
 
-        printf("[daemon] evento: %s → %s\n", action, syspath);
+        int max_fd = (server_fd > udev_fd) ? server_fd : udev_fd;
 
-        // Sólo nos interesa cuando *agregan* un dispositivo USB
-        if (strcmp(action, "add") == 0)
-        {
-            printf("[daemon] dispositivo agregado\n");
-
-            if (dev_has_driver(dev))
-            {
-                printf("[daemon] driver ya presente, no hago nada.\n");
+        if (select(max_fd + 1, &fds, NULL, NULL, NULL) > 0) {
+            
+            // 1. Socket Connection?
+            if (FD_ISSET(server_fd, &fds)) {
+                handle_client();
             }
-            else
-            {
-                printf("[daemon] no hay driver: ejecutando worker\n");
 
-                int has_driver = run_worker_and_parse_json(syspath);
+            // 2. UDev Event?
+            if (FD_ISSET(udev_fd, &fds)) {
+                struct udev_device *dev = udev_monitor_receive_device(mon);
+                if (dev) {
+                    const char *action = udev_device_get_action(dev);
+                    const char *syspath = udev_device_get_syspath(dev);
 
-                if (!has_driver)
-                {
-                    printf("[daemon] worker no encontró driver -> Iniciando UI...\n");
-                    
-                    pid_t pid = fork();
-                    if (pid == 0)
-                    {
-                        // Child process
-                        // Asumimos que ui.py está en el mismo directorio
-                        // Seteamos DISPLAY si es necesario (asumimos :0 para demo)
-                        setenv("DISPLAY", ":0", 0);
+                    if (action && strcmp(action, "add") == 0) {
+                        printf("[daemon] add: %s\n", syspath);
                         
-                        // Necesitamos el user real para ejecutar la UI en el display del user
-                        // (esto es un hack simplificado, en prod usaríamos dbus/polkit)
+                        // Check if it already has a driver bound using our simplified lib check
+                        // Note: udev event might be too early for the driver link to appear if kernel autoloads?
+                        // But if it doesn't have one, we want to intervene.
                         
-                        // Ejecutamos la UI pasando el syspath
-                        execlp("python3", "python3", "ui.py", syspath, NULL);
-                        
-                        // Si falla
-                        perror("[daemon] execlp failed");
-                        exit(1);
+                        if (mc_dev_has_driver(syspath)) {
+                            printf("[daemon] Driver already present. Ignoring.\n");
+                            current_syspath[0] = '\0';
+                        } else {
+                            printf("[daemon] No driver. Triggering UI.\n");
+                            strncpy(current_syspath, syspath, sizeof(current_syspath) - 1);
+                            
+                            // Launch UI
+                            pid_t pid = fork();
+                            if (pid == 0) {
+                                // Child
+                                setenv("DISPLAY", ":0", 0); // Hack for demo
+                                // We don't pass args anymore, UI pulls from socket
+                                execlp("python3", "python3", "ui.py", NULL);
+                                exit(1);
+                            } else {
+                                // Parent
+                                // We don't wait, we keep monitoring.
+                                // But potentially we only want ONE active UI?
+                                // For now, assume one.
+                            }
+                        }
+                    } else if (action && strcmp(action, "remove") == 0) {
+                         if (syspath && strcmp(syspath, current_syspath) == 0) {
+                             current_syspath[0] = '\0';
+                         }
                     }
-                    else if (pid > 0)
-                    {
-                        printf("[daemon] UI lanzada con PID %d\n", pid);
-                    }
-                    else
-                    {
-                        perror("[daemon] fork failed");
-                    }
-                }
-                else
-                {
-                    printf("[daemon] worker encontró driver -> OK\n");
+                    udev_device_unref(dev);
                 }
             }
         }
-
-        udev_device_unref(dev);
     }
 
     udev_unref(udev);
