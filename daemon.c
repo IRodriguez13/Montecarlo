@@ -17,7 +17,7 @@
 static int server_fd = -1;
 static char current_syspath[1024] = {0};
 
-// Cleanup on exit
+/* Cleanup resources on exit */
 void cleanup(int signum) {
     (void)signum;
     if (server_fd != -1) {
@@ -27,7 +27,7 @@ void cleanup(int signum) {
     exit(0);
 }
 
-// Initialize Unix Socket
+/* Initialize Unix Domain Socket */
 int init_socket() {
     struct sockaddr_un addr;
 
@@ -52,21 +52,23 @@ int init_socket() {
         return -1;
     }
     
-    // Allow anyone to connect for this demo (or restrict to root/group)
+    /* Allow connections from any user (demo purpose) or restrict as needed */
     chmod(SOCKET_PATH, 0666);
 
     return 0;
 }
 
-// Handle client connection (Simple: Accept, Send Syspath, Close)
-// In a real app we might keep connection open, but here we just need to pass the arg.
+/*
+ * Handle client connection.
+ * Simplified Protocol: Accept -> Send Target Syspath -> Close.
+ */
 void handle_client() {
     struct sockaddr_un client_addr;
     socklen_t len = sizeof(client_addr);
     int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &len);
     if (client_fd == -1) return;
 
-    // Send current syspath
+    /* Send the current target syspath if available */
     if (current_syspath[0] != '\0') {
         char buf[1024];
         snprintf(buf, sizeof(buf), "{\"event\": \"add\", \"syspath\": \"%s\"}", current_syspath);
@@ -120,12 +122,12 @@ int main()
 
         if (select(max_fd + 1, &fds, NULL, NULL, NULL) > 0) {
             
-            // 1. Socket Connection?
+            /* 1. Incoming Socket Connection */
             if (FD_ISSET(server_fd, &fds)) {
                 handle_client();
             }
 
-            // 2. UDev Event?
+            /* 2. Incoming UDev Event */
             if (FD_ISSET(udev_fd, &fds)) {
                 struct udev_device *dev = udev_monitor_receive_device(mon);
                 if (dev) {
@@ -135,30 +137,24 @@ int main()
                     if (action && strcmp(action, "add") == 0) {
                         printf("[daemon] add: %s\n", syspath);
                         
-                        // Check if it already has a driver bound using our simplified lib check
-                        // Note: udev event might be too early for the driver link to appear if kernel autoloads?
-                        // But if it doesn't have one, we want to intervene.
-                        
+                        /* Check if the device already has a driver bound (ignoring interfaces) */
                         if (mc_dev_has_driver(syspath)) {
                             printf("[daemon] Driver already present. Ignoring.\n");
                             current_syspath[0] = '\0';
                         } else {
-                            printf("[daemon] No driver. Triggering UI.\n");
+                            printf("[daemon] No driver found. Triggering UI.\n");
                             strncpy(current_syspath, syspath, sizeof(current_syspath) - 1);
                             
-                            // Launch UI
+                            /* Launch the User Interface */
                             pid_t pid = fork();
                             if (pid == 0) {
-                                // Child
-                                setenv("DISPLAY", ":0", 0); // Hack for demo
-                                // We don't pass args anymore, UI pulls from socket
+                                /* Child Process */
+                                setenv("DISPLAY", ":0", 0); /* Hack for demo environment */
+                                /* Execute UI without arguments; it will fetch data via socket */
                                 execlp("python3", "python3", "ui.py", NULL);
                                 exit(1);
                             } else {
-                                // Parent
-                                // We don't wait, we keep monitoring.
-                                // But potentially we only want ONE active UI?
-                                // For now, assume one.
+                                /* Parent Process: Continue monitoring */
                             }
                         }
                     } else if (action && strcmp(action, "remove") == 0) {

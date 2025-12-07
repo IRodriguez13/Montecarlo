@@ -63,9 +63,9 @@ void mc_run(const char *syspath)
 
     printf("[mc] vendor=%s product=%s\n", vendor, product);
 
-    // ---------------------------------------------------------
-    // LISTADO DE DRIVERS CANDIDATOS
-    // ---------------------------------------------------------
+    /* --------------------------------------------------------- */
+    /* LIST CANDIDATE DRIVERS                                    */
+    /* --------------------------------------------------------- */
     char drivers[256][128];
     int total = mc_list_candidate_drivers(drivers, 256);
 
@@ -77,9 +77,9 @@ void mc_run(const char *syspath)
         return;
     }
 
-    // ---------------------------------------------------------
-    // LOOP MONTECARLO
-    // ---------------------------------------------------------
+    /* --------------------------------------------------------- */
+    /* MONTE CARLO LOOP                                          */
+    /* --------------------------------------------------------- */
     struct udev *udev = udev_new();
     if (!udev)
     {
@@ -101,44 +101,44 @@ void mc_run(const char *syspath)
     {
         const char *drv = drivers[i];
 
-        printf("[mc] probando driver: %s\n", drv);
+        printf("[mc] Testing driver: %s\n", drv);
 
         if (!mc_try_load_driver(drv))
         {
-            printf("[mc] modprobe falló, paso al siguiente\n");
+            printf("[mc] Modprobe failed, skipping.\n");
             continue;
         }
 
-        sleep(1); // darle tiempo al kernel
+        sleep(1); /* Allow kernel time to register driver */
 
-        // 1) comprobación rápida
+        /* 1) Fast Check (Sysfs binding) */
         if (mc_dev_has_driver(syspath))
         {
-            printf("[mc] driver correcto encontrado: %s\n", drv);
+            printf("[mc] Match found (bound): %s\n", drv);
             cache_save(vendor, product, drv);
             udev_device_unref(dev);
             udev_unref(udev);
             return;
         }
 
-        // 2) comprobación profunda con dmesg
+        /* 2) Deep Check (Dmesg activity) */
         if (mc_dmesg_has_activity(drv))
         {
-            printf("[mc] actividad en kernel para driver %s\n", drv);
+            printf("[mc] Match found (dmesg): %s\n", drv);
             cache_save(vendor, product, drv);
             udev_device_unref(dev);
             udev_unref(udev);
             return;
         }
 
-        // Si no funcionó → descargarlo
+        /* If no success -> unload it */
         mc_unload_driver(drv);
     }
 
-    // ---------------------------------------------------------
-    // SI LLEGAMOS ACÁ, NINGÚN DRIVER FUNCIONÓ
-    // ---------------------------------------------------------
-    printf("[mc] ninguno de los drivers funcionó. Segúramente convenga un kpanic!\n");
+    /* --------------------------------------------------------- */
+    /* IF WE REACH HERE, NO DRIVER WORKED                        */
+    /* --------------------------------------------------------- */
+    printf("[mc] No compatible driver found.\n");
 
     udev_device_unref(dev);
     udev_unref(udev);
