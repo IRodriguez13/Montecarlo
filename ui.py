@@ -6,20 +6,28 @@ import socket
 import json
 import threading
 import ctypes
-from ctypes import c_int, c_char_p, c_char, POINTER, create_string_buffer
+from ctypes import CDLL, c_int, c_char_p, c_char, POINTER, create_string_buffer
 
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib
 
-# --- CTYPES CONFIGURATION ---
-try:
-    # Assuming libmontecarlo.so is in the same directory or LD_LIBRARY_PATH
-    # For dev/demo, we assume current dir
+# --- CONF ---
+SOCK_PATH = "/tmp/montecarlo.sock"
+
+# Path Logic: Env Var for Dev vs Prod
+if os.environ.get("MONTECARLO_DEV"):
+    # Dev Mode: Expect lib in current directory
     LIB_PATH = os.path.abspath("./libmontecarlo.so")
-    libmc = ctypes.CDLL(LIB_PATH)
+    print(f"[UI] Running in DEV mode. Lib: {LIB_PATH}")
+else:
+    # Prod Mode: Expect lib in /usr/lib
+    LIB_PATH = "/usr/lib/libmontecarlo.so"
+
+try:
+    libmc = CDLL(LIB_PATH)
 except OSError as e:
-    print(f"Error loading library: {e}")
+    print(f"Error loading library {LIB_PATH}: {e}")
     sys.exit(1)
 
 # Define Signatures

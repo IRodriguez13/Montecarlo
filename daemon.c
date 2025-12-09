@@ -150,8 +150,20 @@ int main()
                             if (pid == 0) {
                                 /* Child Process */
                                 setenv("DISPLAY", ":0", 0); /* Hack for demo environment */
-                                /* Execute UI without arguments; it will fetch data via socket */
-                                execlp("python3", "python3", "ui.py", NULL);
+                                
+                                /* Path Logic */
+                                if (getenv("MONTECARLO_DEV")) {
+                                    /* Dev Mode: ui.py in cwd */
+                                    printf("[daemon] Launching UI in DEV mode (cwd)\n");
+                                    execlp("python3", "python3", "ui.py", NULL);
+                                } else {
+                                    /* Prod Mode: ui.py in /usr/share/montecarlo */
+                                    /* We call python3 directly on the full path */
+                                    execlp("python3", "python3", "/usr/share/montecarlo/ui.py", NULL);
+                                }
+                                
+                                /* If execlp returns, it failed */
+                                perror("[daemon] execlp failed");
                                 exit(1);
                             } else {
                                 /* Parent Process: Continue monitoring */
