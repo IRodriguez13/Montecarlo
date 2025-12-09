@@ -17,13 +17,17 @@
  * Sanitize module name to prevent command injection
  * Only allows: alphanumeric characters, underscore, and dash
  */
-int is_valid_module_name(const char *name) {
-    if (!name || strlen(name) == 0 || strlen(name) >= MAX_MODULE_NAME) {
+int is_valid_module_name(const char *name) 
+{
+    if (!name || strlen(name) == 0 || strlen(name) >= MAX_MODULE_NAME) 
+    {
         return 0;
     }
     
-    for (int i = 0; name[i]; i++) {
-        if (!isalnum(name[i]) && name[i] != '_' && name[i] != '-') {
+    for (int i = 0; name[i]; i++) 
+    {
+        if (!isalnum(name[i]) && name[i] != '_' && name[i] != '-') 
+        {
             return 0;
         }
     }

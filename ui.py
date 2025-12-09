@@ -440,7 +440,8 @@ class MontecarloUI(Gtk.Window):
                 child_iter = self.repo_filter.convert_iter_to_child_iter(treeiter)
                 self.repo_store.remove(child_iter)
                 
-                time.sleep(1.0)
+                # Wait for udev to settle (proper sync instead of arbitrary sleep)
+                subprocess.run(["udevadm", "settle", "--timeout=2"], capture_output=True)
                 self.refresh_devices()
             else:
                 error_msg = result.stderr.strip() if result.stderr else "Unknown error"
@@ -630,7 +631,7 @@ class MontecarloUI(Gtk.Window):
         
         # Logo/Title
         title = Gtk.Label()
-        title.set_markup("<span size='xx-large' weight='bold'>Montecarlo 0.2</span>")
+        title.set_markup("<span size='xx-large' weight='bold'>Montecarlo 0.3</span>")
         vbox.pack_start(title, False, False, 0)
         
         # Subtitle
@@ -642,7 +643,7 @@ class MontecarloUI(Gtk.Window):
         desc_txt = (
             "Montecarlo allows you to probe, load, and unload USB kernel modules safely.\n"
             "It checks for active use before unloading to protect your system.\n\n"
-            "Dev Build: 0.2 (Testing)"
+            "Dev Build: 0.3 (Beta - PolicyKit Integration)"
         )
         desc = Gtk.Label(label=desc_txt)
         desc.set_justify(Gtk.Justification.CENTER)
@@ -674,28 +675,109 @@ class MontecarloUI(Gtk.Window):
             webbrowser.open(url)
 
     def on_help_clicked(self, widget):
-        dialog = Gtk.MessageDialog(
+        dialog = Gtk.Dialog(
+            title="Help & Tutorial",
             transient_for=self,
-            flags=0,
-            message_type=Gtk.MessageType.INFO,
-            buttons=Gtk.ButtonsType.OK,
-            text="Welcome to Montecarlo"
+            flags=0
         )
+        dialog.set_default_size(600, 500)
         
-        help_text = (
-            "<b>Understanding Kernel Modules:</b>\n"
-            "The Linux Kernel is modular. It can load drivers dynamically from outside the core kernel. "
-            "Some drivers are 'mainline' (built-in), while others reside in your system's module repository "
-            "as external files (*.ko).\n\n"
-            "Montecarlo bridges the gap, allowing you to easily browse, load, and manage these native Linux drivers "
-            "without needing complex terminal commands.\n\n"
-            "<b>Safety Tip 🛡️:</b>\n"
-            "We prioritize your stability. Montecarlo actively prevents you from unloading drivers that are "
-            "<b>currently linked to your active hardware</b>. This ensures you don't accidentally disable your keyboard "
-            "or network card while using them."
+        # Content area
+        box = dialog.get_content_area()
+        box.set_border_width(20)
+        box.set_spacing(15)
+        
+        # Title
+        title = Gtk.Label()
+        title.set_markup("<span size='x-large' weight='bold'>Welcome to Montecarlo</span>")
+        box.pack_start(title, False, False, 0)
+        
+        # Scrolled window for content
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_vexpand(True)
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        
+        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=15)
+        content_box.set_border_width(10)
+        
+        # Section 1: What is a driver?
+        section1_title = Gtk.Label()
+        section1_title.set_markup("<b>❓ What is a driver?</b>")
+        section1_title.set_xalign(0)
+        content_box.pack_start(section1_title, False, False, 0)
+        
+        section1_text = Gtk.Label(
+            label="A driver is a piece of software that allows your operating system to communicate "
+                  "with hardware devices. Without the correct driver, your USB device might not work at all.\n\n"
+                  "Linux drivers are called 'kernel modules' and are stored in /lib/modules/."
         )
+        section1_text.set_line_wrap(True)
+        section1_text.set_xalign(0)
+        content_box.pack_start(section1_text, False, False, 0)
         
-        dialog.format_secondary_markup(help_text)
+        # Section 2: When to use Montecarlo
+        section2_title = Gtk.Label()
+        section2_title.set_markup("<b>🔌 When should I use Montecarlo?</b>")
+        section2_title.set_xalign(0)
+        content_box.pack_start(section2_title, False, False, 0)
+        
+        section2_text = Gtk.Label(
+            label="Use Montecarlo when:\n"
+                  "  • You connect a USB device and it doesn't work\n"
+                  "  • You see an 'Unknown device' in your system\n"
+                  "  • You need to test different drivers for generic USB chips\n"
+                  "  • You want to safely unload unused drivers\n\n"
+                  "Montecarlo automatically detects devices without drivers and helps you find the right module."
+        )
+        section2_text.set_line_wrap(True)
+        section2_text.set_xalign(0)
+        content_box.pack_start(section2_text, False, False, 0)
+        
+        # Section 3: How to use
+        section3_title = Gtk.Label()
+        section3_title.set_markup("<b>📖 How to use Montecarlo</b>")
+        section3_title.set_xalign(0)
+        content_box.pack_start(section3_title, False, False, 0)
+        
+        section3_text = Gtk.Label(
+            label="1. Dashboard Tab: View all connected USB devices and their current drivers\n"
+                  "2. Available Modules Tab: Browse and load drivers from your system\n"
+                  "3. Connect a device: Montecarlo will notify you if it needs a driver\n"
+                  "4. Load a driver: Select it from the list and click 'Load Module'\n"
+                  "5. Authentication: You'll be asked for your password (via PolicyKit)\n\n"
+                  "Safety Features:\n"
+                  "  • Can't unload drivers in active use\n"
+                  "  • Warns you before dangerous operations\n"
+                  "  • Restores removed drivers if needed"
+        )
+        section3_text.set_line_wrap(True)
+        section3_text.set_xalign(0)
+        content_box.pack_start(section3_text, False, False, 0)
+        
+        # Section 4: Tips
+        section4_title = Gtk.Label()
+        section4_title.set_markup("<b>💡 Pro Tips</b>")
+        section4_title.set_xalign(0)
+        content_box.pack_start(section4_title, False, False, 0)
+        
+        section4_text = Gtk.Label(
+            label="• Use the search box to filter modules by name\n"
+                  "• Click 'Search on Web' to find more info about a driver\n"
+                  "• Module descriptions show what each driver is for\n"
+                  "• Check the Telemetry tab to see what Montecarlo is doing\n"
+                  "• Visit the Restore tab to reload previously removed drivers"
+        )
+        section4_text.set_line_wrap(True)
+        section4_text.set_xalign(0)
+        content_box.pack_start(section4_text, False, False, 0)
+        
+        scrolled.add(content_box)
+        box.pack_start(scrolled, True, True, 0)
+        
+        # Close button
+        dialog.add_button("Close", Gtk.ResponseType.CLOSE)
+        
+        dialog.show_all()
         dialog.run()
         dialog.destroy()
 

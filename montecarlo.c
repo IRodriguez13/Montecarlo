@@ -111,7 +111,8 @@ void mc_run(const char *syspath)
             continue;
         }
 
-        sleep(1); /* Allow kernel time to register driver - i know this is a magic number :p*/
+        /* Wait for udev to process events (proper synchronization) */
+        system("udevadm settle --timeout=2 2>/dev/null");
 
         /* 1) Fast Check (Sysfs binding) */
         if (mc_dev_has_driver(syspath))
