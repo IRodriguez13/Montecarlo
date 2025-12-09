@@ -556,54 +556,158 @@ int mc_list_loaded_modules(char *out_buf, int max_size)
     return count;
 }
 
-/* CHECK IF DRIVER IS IN USE (Bus Check) */
-// Returns 1 if driver has devices bound in /sys/bus/.../drivers/<driver>/
-// Returns 0 if safe (no devices).
-int mc_driver_is_in_use(const char *driver)
+/*
+ * Helper: Map module name to driver name
+ * Some modules use different names in /sys/bus/.../drivers/
+ */
+static void get_driver_names(const char *module_name, char names[][128], int *count, int max_names)
 {
-    const char *buses[] = {"usb", "hid", NULL};
-    char path[512];
+    *count = 0;
     
-    for (int i = 0; buses[i] != NULL; i++)
+    if (!module_name || *count >= max_names)
     {
-        snprintf(path, sizeof(path), "/sys/bus/%s/drivers/%s", buses[i], driver);
+        return;
+    }
+    
+    // Always include the module name itself
+    strncpy(names[*count], module_name, 127);
+    names[*count][127] = '\0';
+    (*count)++;
+    
+    // Known mappings for Realtek WiFi drivers
+    if (strncmp(module_name, "rtw88_", 6) == 0 && *count < max_names)
+    {
+        // rtw88_8821cu → rtw_8821cu (without "88")
+        const char *suffix = module_name + 6;  // Skip "rtw88_"
+        snprintf(names[*count], 128, "rtw_%s", suffix);
+        (*count)++;
+    }
+    else if (strncmp(module_name, "rtl", 3) == 0 && *count < max_names)
+    {
+        // rtl8xxxu variants
+        snprintf(names[*count], 128, "rtw_%s", module_name + 3);
+        (*count)++;
+    }
+}
+
+/*
+ * Check if a driver is currently in use by checking for device bindings.
+ * Checks both PCI and USB buses, and tries multiple name variants.
+ * Returns 1 if in use, 0 otherwise.
+ */
+int mc_driver_is_in_use(const char *driver_name)
+{
+    if (!driver_name || driver_name[0] == '\0')
+    {
+        return 0;
+    }
+    
+    // Get all possible driver name variants
+    char driver_names[4][128];
+    int name_count = 0;
+    get_driver_names(driver_name, driver_names, &name_count, 4);
+    
+    // Try each name variant
+    for (int n = 0; n < name_count; n++)
+    {
+        const char *current_name = driver_names[n];
         
-        DIR *dir = opendir(path);
-        if (!dir)
+        // Check PCI bus
+        char pci_path[512];
+        snprintf(pci_path, sizeof(pci_path), "/sys/bus/pci/drivers/%s", current_name);
+        
+        DIR *pci_dir = opendir(pci_path);
+        if (pci_dir)
         {
-            continue; // Bus or driver doesn't exist here
+            struct dirent *entry;
+            while ((entry = readdir(pci_dir)) != NULL)
+            {
+                if (entry->d_name[0] == '.')
+                    continue;
+                
+                // Skip special files
+                if (strcmp(entry->d_name, "bind") == 0 ||
+                    strcmp(entry->d_name, "unbind") == 0 ||
+                    strcmp(entry->d_name, "uevent") == 0 ||
+                    strcmp(entry->d_name, "module") == 0 ||
+                    strcmp(entry->d_name, "new_id") == 0 ||
+                    strcmp(entry->d_name, "remove_id") == 0)
+                    continue;
+                
+                // Check if it's a symlink (device binding)
+                char full_path[768];
+                snprintf(full_path, sizeof(full_path), "%s/%s", pci_path, entry->d_name);
+                
+                struct stat sb;
+                if (lstat(full_path, &sb) == 0 && S_ISLNK(sb.st_mode))
+                {
+                    closedir(pci_dir);
+                    return 1;
+                }
+            }
+            closedir(pci_dir);
         }
         
-        struct dirent *ent;
-        int found = 0;
+        // Check USB bus
+        char usb_path[512];
+        snprintf(usb_path, sizeof(usb_path), "/sys/bus/usb/drivers/%s", current_name);
         
-        while ((ent = readdir(dir)) != NULL)
+        DIR *usb_dir = opendir(usb_path);
+        if (usb_dir)
         {
-            if (ent->d_name[0] == '.')
+            struct dirent *entry;
+            while ((entry = readdir(usb_dir)) != NULL)
             {
-                continue;
+                if (entry->d_name[0] == '.')
+                    continue;
+                
+                // Skip special files
+                if (strcmp(entry->d_name, "bind") == 0 ||
+                    strcmp(entry->d_name, "unbind") == 0 ||
+                    strcmp(entry->d_name, "uevent") == 0 ||
+                    strcmp(entry->d_name, "module") == 0 ||
+                    strcmp(entry->d_name, "new_id") == 0 ||
+                    strcmp(entry->d_name, "remove_id") == 0)
+                    continue;
+                
+                // Check if it's a symlink (device binding)
+                char full_path[768];
+                snprintf(full_path, sizeof(full_path), "%s/%s", usb_path, entry->d_name);
+                
+                struct stat sb;
+                if (lstat(full_path, &sb) == 0 && S_ISLNK(sb.st_mode))
+                {
+                    closedir(usb_dir);
+                    return 1;
+                }
             }
-            // FIX: Ignore 'module' symlink which links back to the module owner
-            if (strcmp(ent->d_name, "module") == 0)
+            closedir(usb_dir);
+        }
+    }
+    
+    // Check holders (module dependencies) - use original name
+    char holders_path[512];
+    snprintf(holders_path, sizeof(holders_path), "/sys/module/%s/holders", driver_name);
+    
+    DIR *holders_dir = opendir(holders_path);
+    if (holders_dir)
+    {
+        struct dirent *entry;
+        int has_holders = 0;
+        
+        while ((entry = readdir(holders_dir)) != NULL)
+        {
+            if (entry->d_name[0] != '.')
             {
-                continue;
-            }
-            
-            char fullpath[1024];
-            snprintf(fullpath, sizeof(fullpath), "%s/%s", path, ent->d_name);
-            
-            struct stat st;
-            if (lstat(fullpath, &st) == 0 && S_ISLNK(st.st_mode)) 
-            {
-                found = 1;
-                break; 
+                has_holders = 1;
+                break;
             }
         }
+        closedir(holders_dir);
         
-        closedir(dir);
-        if (found)
+        if (has_holders)
         {
-            return 1;
+            return 1;  // Has dependent modules
         }
     }
     

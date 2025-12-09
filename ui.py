@@ -949,33 +949,190 @@ class MontecarloUI(Gtk.Window):
             ])
             
         # 3. Add Loaded Modules that DON'T have hardware present (Idle modules)
-        # Show ALL loaded modules (not just USB) that:
-        #   - Are NOT in use by hardware (not in used_drivers)
-        #   - Are NOT dependencies (no holders)
-        #   - Are NOT infrastructure (hubs, host controllers, bridges, etc.)
+        # CRITICAL: Only show SAFE modules that users can actually unload
+        # DO NOT show kernel subsystems (filesystems, netfilter, crypto, etc.)
         
-        # Infrastructure/dependency modules to always exclude
-        excluded_modules = {
-            # USB infrastructure
-            "usbcore", "usb_common", "usb_storage",
-            "hub", "xhci_hcd", "ehci_hcd", "uhci_hcd", "ohci_hcd", 
-            "xhci_pci", "ehci_pci", "ohci_pci",
-            # PCI infrastructure  
-            "pcieport", "pci_bridge", "shpchp",
-            # SCSI infrastructure
-            "scsi_mod", "sd_mod", "sr_mod",
-            # General kernel modules
-            "kernel", "bluetooth", "rfkill",
-        }
+        def is_safe_module(mod):
+            """
+            Check if module is safe to show for unloading.
+            STRICT FILTERING: Only real hardware drivers, never kernel subsystems.
+            """
+            
+            # ========================================
+            # CATEGORY 1: KERNEL CORE (NEVER TOUCH)
+            # ========================================
+            
+            # CPU / ACPI / BIOS / Firmware
+            kernel_core = {
+                "cpuid", "msr", 
+                "acpi_pad", "acpi_cpufreq", "acpi_thermal",
+                "dmi_sysfs", "dmi_notifier",
+                "efi_pstore", "efivars", "efivarfs",
+                "pstore", "pstore_blk", "pstore_ram",
+            }
+            
+            # Memory / Block / Compression
+            memory_block = {
+                "zram", "zsmalloc",
+                "loop", "nbd",
+            }
+            
+            # RAID / DM / MD
+            raid_dm = {
+                "raid0", "raid1", "raid10", "raid456", "raid6_pq",
+                "dm_mod", "dm_crypt", "dm_mirror", "dm_snapshot",
+                "md_mod", "linear", "multipath",
+            }
+            
+            # Filesystems (NEVER unload - can cause data loss)
+            filesystems = {
+                "ext4", "ext3", "ext2", "jbd2", "mbcache",
+                "btrfs", "xfs", "jfs", "reiserfs", "minix",
+                "vfat", "fat", "msdos", "ntfs", "ntfs3",
+                "fuse", "fuseblk", "overlayfs",
+                "squashfs", "iso9660", "udf",
+                "nfs", "nfsd", "lockd", "exportfs",
+                "cifs", "smb", "smbfs",
+            }
+            
+            # Sound Core (not individual drivers)
+            sound_core = {
+                "soundcore", 
+                "snd", "snd_seq", "snd_seq_device", "snd_seq_midi", 
+                "snd_seq_midi_event", "snd_timer", "snd_pcm",
+                "snd_rawmidi", "snd_hwdep",
+                "snd_hda_core", "snd_hda_codec", "snd_hda_codec_generic",
+                "snd_hda_intel",  # This is borderline, but keep excluded for safety
+            }
+            
+            # HID Base / Input Core (not individual device drivers)
+            hid_input_core = {
+                "hid", "hid_generic", "uhid", "hidp",
+                "usbhid", "usbkbd", "usbmouse",
+                "joydev", "evdev", "mousedev",
+                "input_leds", "led_class",
+            }
+            
+            # Virtualization
+            virtualization = {
+                "kvm", "kvm_intel", "kvm_amd",
+                "vboxdrv", "vboxnetflt", "vboxnetadp", "vboxpci",
+                "vmw_balloon", "vmw_vmci", "vmw_vsock_vmci_transport",
+                "virtio", "virtio_pci", "virtio_balloon", "virtio_blk", "virtio_net",
+                "vhost", "vhost_net", "vhost_vsock",
+            }
+            
+            # Network Core / Bridging
+            network_core = {
+                "bridge", "stp", "llc", "bonding", "8021q",
+                "veth", "tun", "tap",
+            }
+            
+            # Parport / Legacy
+            legacy_subsystems = {
+                "parport", "parport_pc", "ppdev", "lp",
+            }
+            
+            # Check all core categories
+            all_core_modules = (
+                kernel_core | memory_block | raid_dm | filesystems |
+                sound_core | hid_input_core | virtualization |
+                network_core | legacy_subsystems
+            )
+            
+            if mod in all_core_modules:
+                return False
+            
+            # ========================================
+            # CATEGORY 2: PATTERN-BASED EXCLUSIONS
+            # ========================================
+            
+            dangerous_patterns = [
+                # Netfilter / iptables / nftables
+                "xt_", "nf_", "nft_", "ip_", "ip6_", "ipt_", "ip6t_",
+                "nfnetlink", "netfilter", "conntrack",
+                # Crypto
+                "crypto_", "sha", "aes", "ghash", "crc32", "md5", "des",
+                "ecb", "cbc", "gcm", "ccm", "ctr",
+                # CPU / Thermal
+                "k10temp", "coretemp", "ssse3", "aesni", "cpu_", 
+                "cpufreq", "intel_", "amd_", "x86_pkg_temp",
+                # ACPI additional
+                "acpi", "battery", "ac", "button", "fan", "thermal",
+                # I2C / SPI (bus infrastructure)
+                "i2c_", "spi_", "smbus",
+                # PCI infrastructure (already in basic_exclude but double-check)
+                "pcieport", "pci_bridge", "shpchp",
+                # SCSI infrastructure
+                "scsi_mod", "sd_mod", "sr_mod", "sg", "st",
+                # Block layer core
+                "nvme_core",
+                # Video core (not drivers)
+                "videodev", "videobuf", "v4l2_common",
+                # Sound additional patterns
+                "snd_",
+                # HID additional
+                "hid_",
+                # Virtualization additional
+                "vbox", "vmw_",
+            ]
+            
+            for pattern in dangerous_patterns:
+                if mod.startswith(pattern):
+                    return False
+            
+            # ========================================
+            # CATEGORY 3: HARDWARE MODALIAS CHECK
+            # ========================================
+            # STRICT: Module MUST have real hardware alias
+            
+            try:
+                result = subprocess.run(
+                    ["modinfo", "-F", "alias", mod],
+                    capture_output=True,
+                    text=True,
+                    timeout=1
+                )
+                
+                if result.returncode != 0 or not result.stdout:
+                    # No aliases = not a hardware driver
+                    return False
+                
+                aliases = result.stdout.strip()
+                
+                # Check if ANY alias indicates real hardware
+                hardware_prefixes = ["pci:", "usb:", "platform:", "hid:", "serio:", "of:"]
+                has_hardware_alias = False
+                
+                for alias_line in aliases.split('\n'):
+                    for prefix in hardware_prefixes:
+                        if alias_line.strip().startswith(prefix):
+                            has_hardware_alias = True
+                            break
+                    if has_hardware_alias:
+                        break
+                
+                # STRICT: If no hardware alias, reject
+                if not has_hardware_alias:
+                    return False
+                        
+            except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+                # If modinfo fails, reject for safety
+                return False
+            
+            # ========================================
+            # PASSED ALL CHECKS
+            # ========================================
+            return True
         
-        # Filter Unused Loaded Modules
+        # Filter Loaded Modules (only safe ones)
         for mod in loaded_set:
             # Skip if already shown as in-use
             if mod in used_drivers:
                 continue
             
-            # Skip infrastructure/common modules
-            if mod in excluded_modules:
+            # CRITICAL: Only show safe modules
+            if not is_safe_module(mod):
                 continue
             
             # Skip if has holders (it's a dependency)
@@ -1102,7 +1259,7 @@ class MontecarloUI(Gtk.Window):
                 flags=0,
                 message_type=Gtk.MessageType.WARNING, # Or ERROR to be scary
                 buttons=Gtk.ButtonsType.OK_CANCEL,
-                text=f"COMBAT ALERT: {real_driver} is IN USE!"
+                text=f"BE CAREFUL: {real_driver} is IN USE!"
             )
             dialog.format_secondary_text(
                 f"The driver '{real_driver}' is currently controlling active hardware.\n\n"

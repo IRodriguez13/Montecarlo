@@ -5,7 +5,7 @@ All notable changes to Montecarlo will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] - 2025-12-09
+## [0.4.0]
 
 ### Added
 - **Version information**: `--version` flag for daemon and version display in UI
@@ -25,11 +25,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Dashboard logic**: Changed from USB-only module display to all-subsystem support
 - **Security**: Socket path no longer world-writable
 
+### Security
+- **CRITICAL: Safe module filtering**: Implemented strict filtering to prevent unloading kernel subsystems
+  - **Explicit category exclusions**: 9 categories with 80+ specific modules excluded
+    - Kernel core: CPU (cpuid, k10temp), ACPI (dmi_sysfs, acpi_thermal), Firmware (efi_pstore, pstore)
+    - Memory/Block: zram, zsmalloc, loop, nbd
+    - RAID: raid0-6, dm_mod, md_mod
+    - Filesystems: ext4, btrfs, xfs, ntfs, fuse, nfs, cifs (all filesystem modules)
+    - Sound core: snd_*, soundcore, snd_seq_midi, snd_hda_intel
+    - HID/Input: hid_generic, usbhid, joydev, evdev
+    - Virtualization: kvm, vbox*, vmw_*, virtio*
+    - Network core: bridge, stp, llc, bonding
+    - Legacy: parport_pc, ppdev
+  - **Pattern-based exclusions**: Netfilter (xt_*, nf_*, nft_*), crypto (sha*, aes*), thermal, I2C/SPI bus, video/sound infrastructure
+  - **Hardware modalias requirement**: Module MUST have real hardware alias (pci:, usb:, platform:, hid:, serio:, of:) to be shown
+  - **Fail-safe**: If modinfo fails or no alias found, module is hidden
+  - Prevents accidental unloading of critical system components (swap, filesystems, input drivers, sound stack, etc.)
+
 ### Fixed
 - Modules loaded from repository now correctly appear in dashboard
 - Infrastructure devices (bridges, ports, SCSI hosts) properly hidden
+- **Driver "In Use" detection**: Fixed bug where USB/WiFi drivers showed as "Idle" when actually in use
+  - Now checks `/sys/bus/usb/drivers/` in addition to `/sys/bus/pci/drivers/`
+  - Added `/sys/module/<name>/holders` check for module dependencies
+  - Added name normalization (lowercase, strip hyphens/underscores) for comparison
+  - Fixes rtw88_8821cu and similar WiFi/USB drivers showing incorrect status
 
-## [0.3.0] - 2024
+## [0.3.0] 
 
 ### Added
 - Infrastructure device filtering (initial implementation)
@@ -43,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enhanced UI with device details panel
 - Better module filtering (dependency detection)
 
-## [0.2.0] - 2024
+## [0.2.0]
 
 ### Added
 - GTK3 user interface
@@ -54,7 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Migrated from CLI-only to GUI application
 
-## [0.1.0] - 2024
+## [0.1.0]
 
 ### Added
 - Initial release
