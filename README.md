@@ -63,6 +63,13 @@ cd Montecarlo
 
 # Build Daemon and Shared Library
 make
+
+### Packaging (.deb)
+To build a Debian package (requires `devscripts`, `debhelper`):
+
+```bash
+dpkg-buildpackage -us -uc
+```
 ```
 
 ### Local Testing

@@ -82,7 +82,7 @@ int mc_list_candidate_drivers(char out[][128], int max)
 
             if (count < max)
             {
-                snprintf(out[count], 128, "%s", ent->d_name);
+                snprintf(out[count], 128, "%.127s", ent->d_name);
                 out[count][127] = '\0';
                 count++;
             }
@@ -160,7 +160,6 @@ int mc_dev_has_driver(const char *syspath)
         return 0;
     }
     
-    struct udev_device *driver = udev_device_get_parent_with_subsystem_devtype(dev, "usb", "usb_interface");
     /* 
      * If not found via parent, checks if "driver" link exists in syspath
      * Simplified logic for demonstration.
@@ -177,4 +176,96 @@ int mc_dev_has_driver(const char *syspath)
     udev_device_unref(dev);
     udev_unref(udev);
     return has_driver;
+}
+
+/* --------------------------------------------------------------- */
+/* LIST ALL USB DEVICES                                            */
+/* --------------------------------------------------------------- */
+int mc_list_all_usb_devices(mc_device_info_t *out, int max)
+{
+    struct udev *udev = udev_new();
+    if (!udev) return 0;
+
+    struct udev_enumerate *enumerate = udev_enumerate_new(udev);
+    udev_enumerate_add_match_subsystem(enumerate, "usb");
+    udev_enumerate_scan_devices(enumerate);
+
+    struct udev_list_entry *devices, *dev_list_entry;
+    devices = udev_enumerate_get_list_entry(enumerate);
+
+    int count = 0;
+    udev_list_entry_foreach(dev_list_entry, devices) {
+        if (count >= max) break;
+
+        const char *path = udev_list_entry_get_name(dev_list_entry);
+        struct udev_device *dev = udev_device_new_from_syspath(udev, path);
+
+        if (!dev) continue;
+
+        // Verify it's a physical device, not an interface (usually has devtype "usb_device")
+        const char *devtype = udev_device_get_devtype(dev);
+        if (!devtype || strcmp(devtype, "usb_device") != 0) {
+            udev_device_unref(dev);
+            continue;
+        }
+
+        // Fill struct
+        strncpy(out[count].syspath, path, 255);
+        
+        const char *vendor = udev_device_get_sysattr_value(dev, "idVendor");
+        const char *product = udev_device_get_sysattr_value(dev, "idProduct");
+        const char *prod_name = udev_device_get_sysattr_value(dev, "product");
+        const char *man_name = udev_device_get_sysattr_value(dev, "manufacturer");
+
+        snprintf(out[count].vidpid, 31, "%s:%s", vendor ? vendor : "????", product ? product : "????");
+        
+        if (prod_name) {
+            if (man_name)
+                snprintf(out[count].product, 127, "%s %s", man_name, prod_name);
+            else
+                strncpy(out[count].product, prod_name, 127);
+        } else {
+             strncpy(out[count].product, "Unknown Device", 127);
+        }
+
+        // Check for driver (USB devices generally bind slightly differently, often interfaces bind)
+        // For the purpose of this tool, we check if ANY interface has a driver or if the device itself is claimed.
+        // But the previous checking logic was at interface level usually? 
+        // Let's stick to the "driver" link check or basic parent logic.
+        // Ideally we want to see if this device is "working".
+        
+        // Actually, usb_device usually doesn't have a specific driver, the interfaces do.
+        // But generic drivers might attach. 
+        // For dashboard list, let's just show "usb-generic" or similar if handled, 
+        // or check the first interface's driver.
+        
+        // Let's see if we can find the driver of the first interface usually.
+        // Or just leave it empty if the device itself isn't bound (which is normal for USB composition).
+        
+        // User wants to know if "drivers are loaded".
+        // Let's try to find an active driver on the device or its interfaces.
+        
+        // Simple heuristic: "usb" is the driver for the device itself usually.
+        // Let's check syspath/driver link used in other functions.
+        char driver_path[1024];
+        snprintf(driver_path, sizeof(driver_path), "%s/driver", path);
+        
+        char driver_target[1024];
+        int len = readlink(driver_path, driver_target, sizeof(driver_target)-1);
+        if (len != -1) {
+            driver_target[len] = '\0';
+            const char *dname = strrchr(driver_target, '/');
+            strncpy(out[count].driver, dname ? dname + 1 : "generic-usb", 63);
+        } else {
+             strcpy(out[count].driver, "None");
+        }
+        
+        count++;
+        udev_device_unref(dev);
+    }
+
+    udev_enumerate_unref(enumerate);
+    udev_unref(udev);
+
+    return count;
 }

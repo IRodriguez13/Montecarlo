@@ -6,22 +6,18 @@ import socket
 import json
 import threading
 import ctypes
-from ctypes import CDLL, c_int, c_char_p, c_char, POINTER, create_string_buffer
+from ctypes import CDLL, c_int, c_char_p, c_char, POINTER, create_string_buffer, Structure
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib
+from gi.repository import Gtk, GLib, Pango
 
-# --- CONF ---
+# --- CONFIG & LIBS ---
 SOCK_PATH = "/tmp/montecarlo.sock"
 
-# Path Logic: Env Var for Dev vs Prod
 if os.environ.get("MONTECARLO_DEV"):
-    # Dev Mode: Expect lib in current directory
     LIB_PATH = os.path.abspath("./libmontecarlo.so")
-    print(f"[UI] Running in DEV mode. Lib: {LIB_PATH}")
 else:
-    # Prod Mode: Expect lib in /usr/lib
     LIB_PATH = "/usr/lib/libmontecarlo.so"
 
 try:
@@ -30,12 +26,17 @@ except OSError as e:
     print(f"Error loading library {LIB_PATH}: {e}")
     sys.exit(1)
 
-# Define Signatures
-# int mc_list_candidate_drivers(char out[][128], int max);
-# We need to handle the 2D array. simpler to map it as a flat check or use helper
-# But for now, let's map it carefully.
-# char out[][128] is basically char* passed, but memory layout is contiguous.
+# --- C TYPES DEFINITIONS ---
 
+class MCDeviceInfo(Structure):
+    _fields_ = [
+        ("syspath", c_char * 256),
+        ("vidpid", c_char * 32),
+        ("product", c_char * 128),
+        ("driver", c_char * 64)
+    ]
+
+# Signatures
 libmc.mc_try_load_driver.argtypes = [c_char_p]
 libmc.mc_try_load_driver.restype = c_int
 
@@ -48,326 +49,328 @@ libmc.mc_dev_has_driver.restype = c_int
 libmc.mc_dmesg_has_activity.argtypes = [c_char_p]
 libmc.mc_dmesg_has_activity.restype = c_int
 
-libmc.mc_get_ids.argtypes = [c_char_p, c_char_p, c_char_p]
-libmc.mc_get_ids.restype = None
-
-# list_candidate_drivers is tricky in ctypes with 2D arrays so let's use a helper wrapper
-# or just allocate a big buffer and handle offsets.
-# char out[256][128]
-# 256 * 128 = 32768 bytes
-class DriversArray(ctypes.Structure):
-    _fields_ = [("drivers", c_char * (256 * 128))]
-
 libmc.mc_list_candidate_drivers.argtypes = [POINTER(c_char), c_int]
 libmc.mc_list_candidate_drivers.restype = c_int
 
-SOCKET_PATH = "/tmp/montecarlo.sock"
+libmc.mc_list_all_usb_devices.argtypes = [POINTER(MCDeviceInfo), c_int]
+libmc.mc_list_all_usb_devices.restype = c_int
+
+# --- UI CLASS ---
 
 class MontecarloUI(Gtk.Window):
     def __init__(self):
-        super().__init__(title="Montecarlo Driver Manager")
-        self.set_default_size(600, 450)
+        super().__init__(title="Montecarlo Dashboard")
+        self.set_default_size(900, 600)
         self.set_border_width(10)
         
-        self.syspath = None  # Will be set via socket or manual arg to debug
+        # State
+        self.target_syspath = None
+        self.running_auto = False
         
-        # Main Layout
+        # Layout
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.add(vbox)
         
         # Header
-        self.header = Gtk.Label()
-        self.header.set_markup("<span size='x-large' weight='bold'>Montecarlo Driver Manager</span>")
-        vbox.pack_start(self.header, False, False, 10)
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        lbl_title = Gtk.Label()
+        lbl_title.set_markup("<span size='x-large' weight='bold'>Montecarlo</span>")
+        header_box.pack_start(lbl_title, False, False, 0)
         
-        self.info_label = Gtk.Label(label="Waiting for daemon...")
-        vbox.pack_start(self.info_label, False, False, 5)
+        self.spinner = Gtk.Spinner()
+        header_box.pack_start(self.spinner, False, False, 0)
+        vbox.pack_start(header_box, False, False, 5)
         
-        # Notebook (Tabs)
+        # Main Notebook
         self.notebook = Gtk.Notebook()
         vbox.pack_start(self.notebook, True, True, 0)
         
-        # --- TAB 1: AUTO MODE ---
-        self.page_auto = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        self.page_auto.set_border_width(10)
+        # --- TAB 1: DASHBOARD ---
+        self.build_dashboard_tab()
         
-        self.status_label = Gtk.Label(label="Ready.")
-        self.page_auto.pack_start(self.status_label, False, False, 10)
+        # --- TAB 2: TELEMETRY (Logs) ---
+        self.build_telemetry_tab()
         
-        # Log view
-        scrolled_window = Gtk.ScrolledWindow()
-        scrolled_window.set_hexpand(True)
-        scrolled_window.set_vexpand(True)
-        self.textview = Gtk.TextView()
-        self.textview.set_editable(False)
-        self.textbuffer = self.textview.get_buffer()
-        scrolled_window.add(self.textview)
-        self.page_auto.pack_start(scrolled_window, True, True, 0)
+        # CLI Argument handling (if launched by daemon with arg)
+        if len(sys.argv) > 1:
+            self.target_syspath = sys.argv[1]
+            self.log(f"[INIT] Launched with target: {self.target_syspath}")
+            # Switch to telemetry and start auto-process? Or show in Dashboard?
+            # User wants visibility. Let's select it in dashboard if possible.
+            # But scanning takes time. We will scan then try to highlight.
+            pass
         
-        self.btn_run = Gtk.Button(label="Run Montecarlo")
-        self.btn_run.connect("clicked", self.on_run_clicked)
-        self.btn_run.set_sensitive(False) # Wait for target
-        self.page_auto.pack_start(self.btn_run, False, False, 5)
-        
-        self.notebook.append_page(self.page_auto, Gtk.Label(label="Auto Mode"))
-        
-        # --- TAB 2: ROOT MODE (Manual) ---
-        self.page_root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        self.page_root.set_border_width(10)
-        
-        lbl_root = Gtk.Label(label="Manual Driver Management (Root)")
-        self.page_root.pack_start(lbl_root, False, False, 5)
-        
-        self.setup_root_ui()
-        
-        self.notebook.append_page(self.page_root, Gtk.Label(label="Root Mode"))
-        
-        # Start connection thread
-        t = threading.Thread(target=self.connect_to_daemon)
+        # Start Socket Listener
+        t = threading.Thread(target=self.socket_listener)
         t.daemon = True
         t.start()
+        
+        # Initial Scan
+        self.refresh_devices()
 
-    def connect_to_daemon(self):
+        # PID File for Daemon Singleton Check
+        self.pid_file = "/tmp/montecarlo_ui.pid"
         try:
-            GLib.idle_add(self.log, "Connecting to daemon socket...")
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.connect(SOCKET_PATH)
-            
-            data = sock.recv(4096)
-            if data:
-                try:
-                    msg = json.loads(data.decode("utf-8"))
-                    if msg.get("event") == "add" and "syspath" in msg:
-                        self.syspath = msg["syspath"]
-                        GLib.idle_add(self.update_ui_with_syspath, self.syspath)
-                    else:
-                        GLib.idle_add(self.log, "No active device or unknown event.")
-                except Exception as e:
-                    GLib.idle_add(self.log, f"JSON Error: {e}")
-            
-            sock.close()
+            with open(self.pid_file, "w") as f:
+                f.write(str(os.getpid()))
         except Exception as e:
-             # Fallback for manual testing support
-             args = sys.argv
-             if len(args) > 1:
-                 self.syspath = args[1]
-                 GLib.idle_add(self.log, f"Using CLI arg syspath: {self.syspath}")
-                 GLib.idle_add(self.update_ui_with_syspath, self.syspath)
-             else:
-                 GLib.idle_add(self.log, f"Socket Connect Error: {e}. Waiting...")
+            print(f"Failed to write PID file: {e}")
 
-    def update_ui_with_syspath(self, syspath):
-        self.info_label.set_text(f"Target Device: {syspath}")
-        self.btn_run.set_sensitive(True)
-        self.log(f"Target acquired: {syspath}")
+    def build_dashboard_tab(self):
+        self.dash_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.dash_box.set_border_width(10)
         
-        # Auto-start if desired, but user asked for "dispara la UI... y arranca a trabajar"
-        # "dispara la UI y arranca a trabajar la lógica" implies auto start or at least ready to start.
-        # User said "si no tiene, dispara la UI y arranca a trabajar la lógica" -> maybe auto start.
-        # I'll leave it as a button press for safety OR auto-click.
-        # Let's auto-click for the "User Experience" requested.
-        self.on_run_clicked(self.btn_run)
+        # Toolbar
+        toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        
+        btn_refresh = Gtk.Button(label="Rescan Devices")
+        btn_refresh.set_image(Gtk.Image.new_from_icon_name("view-refresh", Gtk.IconSize.BUTTON))
+        btn_refresh.connect("clicked", lambda w: self.refresh_devices())
+        toolbar.pack_start(btn_refresh, False, False, 0)
+        
+        toolbar.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 10)
+        
+        self.btn_auto = Gtk.Button(label="Auto-Find Driver")
+        self.btn_auto.set_image(Gtk.Image.new_from_icon_name("system-run", Gtk.IconSize.BUTTON))
+        self.btn_auto.get_style_context().add_class("suggested-action")
+        self.btn_auto.connect("clicked", self.on_auto_find_clicked)
+        toolbar.pack_start(self.btn_auto, False, False, 0)
+        
+        self.btn_unload = Gtk.Button(label="Unload Driver")
+        self.btn_unload.connect("clicked", self.on_unload_clicked)
+        toolbar.pack_start(self.btn_unload, False, False, 0)
+        
+        self.dash_box.pack_start(toolbar, False, False, 0)
+        
+        # Device List
+        # Model: Syspath, VidPid, Product, Driver, IconName
+        self.dev_store = Gtk.ListStore(str, str, str, str, str)
+        self.dev_tree = Gtk.TreeView(model=self.dev_store)
+        
+        # Columns
+        # Icon + Product
+        col_prod = Gtk.TreeViewColumn("Device")
+        cell_pix = Gtk.CellRendererPixbuf()
+        col_prod.pack_start(cell_pix, False)
+        col_prod.add_attribute(cell_pix, "icon-name", 4)
+        
+        cell_text = Gtk.CellRendererText()
+        col_prod.pack_start(cell_text, True)
+        col_prod.add_attribute(cell_text, "text", 2)
+        self.dev_tree.append_column(col_prod)
+        
+        self.dev_tree.append_column(Gtk.TreeViewColumn("ID", Gtk.CellRendererText(), text=1))
+        
+        # Driver Column (Bold if None)
+        col_drv = Gtk.TreeViewColumn("Driver")
+        cell_drv = Gtk.CellRendererText()
+        col_drv.pack_start(cell_drv, True)
+        col_drv.add_attribute(cell_drv, "text", 3)
+        self.dev_tree.append_column(col_drv)
+        
+        self.dev_tree.get_selection().connect("changed", self.on_dev_selection_changed)
+        
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.add(self.dev_tree)
+        self.dash_box.pack_start(scroll, True, True, 0)
+        
+        self.notebook.append_page(self.dash_box, Gtk.Label(label="Devices Dashboard"))
 
-    # --- AUTO MODE LOGIC (Monte Carlo in Python via ctypes) ---
-    def on_run_clicked(self, widget):
-        self.btn_run.set_sensitive(False)
-        self.status_label.set_text("Running Montecarlo...")
+    def build_telemetry_tab(self):
+        self.tele_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        self.tele_box.set_border_width(10)
         
-        t = threading.Thread(target=self.run_montecarlo_logic)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        self.log_view = Gtk.TextView()
+        self.log_view.set_editable(False)
+        self.log_view.set_monospace(True)
+        # Style log
+        self.log_view.set_left_margin(10)
+        self.log_buf = self.log_view.get_buffer()
+        
+        self.tag_bold = self.log_buf.create_tag("bold", weight=Pango.Weight.BOLD)
+        self.tag_green = self.log_buf.create_tag("green", foreground="green")
+        self.tag_red = self.log_buf.create_tag("red", foreground="red")
+        
+        scroll.add(self.log_view)
+        self.tele_box.pack_start(scroll, True, True, 0)
+        
+        self.notebook.append_page(self.tele_box, Gtk.Label(label="Telemetry Log"))
+
+    def log(self, text, tag=None):
+        def _log():
+            end = self.log_buf.get_end_iter()
+            ts = time.strftime("[%H:%M:%S] ")
+            self.log_buf.insert(end, ts)
+            
+            end = self.log_buf.get_end_iter()
+            if tag:
+                self.log_buf.insert_with_tags_by_name(end, text + "\n", tag)
+            else:
+                self.log_buf.insert(end, text + "\n")
+                
+            adj = self.log_view.get_vadjustment()
+            adj.set_value(adj.get_upper() - adj.get_page_size())
+        
+        GLib.idle_add(_log)
+
+    # --- LOGIC ---
+
+    def refresh_devices(self):
+        self.log("Scanning USB devices...")
+        self.dev_store.clear()
+        
+        max_devs = 64
+        arr = (MCDeviceInfo * max_devs)()
+        count = libmc.mc_list_all_usb_devices(arr, max_devs)
+        
+        self.log(f"Scan complete. Found {count} devices.")
+        
+        for i in range(count):
+            d = arr[i]
+            syspath = d.syspath.decode('utf-8', 'ignore')
+            vidpid = d.vidpid.decode('utf-8', 'ignore')
+            product = d.product.decode('utf-8', 'ignore')
+            driver = d.driver.decode('utf-8', 'ignore')
+            
+            icon = "input-mouse" # default generic
+            if "None" in driver:
+                icon = "dialog-warning" # Alert user
+            elif "hub" in driver:
+                icon = "computer"
+            else:
+                icon = "drive-harddisk"
+            
+            self.dev_store.append([syspath, vidpid, product, driver, icon])
+
+    def on_dev_selection_changed(self, selection):
+        model, treeiter = selection.get_selected()
+        if treeiter:
+            self.btn_auto.set_sensitive(True)
+            self.btn_unload.set_sensitive(True)
+        else:
+            self.btn_auto.set_sensitive(False)
+            self.btn_unload.set_sensitive(False)
+
+    def on_unload_clicked(self, widget):
+        model, treeiter = self.dev_tree.get_selection().get_selected()
+        if not treeiter: return
+        
+        driver = model[treeiter][3]
+        if driver == "None":
+            self.log("Device has no driver to unload.", "red")
+            return
+            
+        self.log(f"Unloading driver {driver}...", "bold")
+        libmc.mc_unload_driver(driver.encode('utf-8'))
+        
+        time.sleep(0.5)
+        self.refresh_devices()
+
+    def on_auto_find_clicked(self, widget):
+        model, treeiter = self.dev_tree.get_selection().get_selected()
+        if not treeiter: return
+        
+        syspath = model[treeiter][0]
+        name = model[treeiter][2]
+        
+        self.log(f"Starting Montecarlo Auto-Find for: {name}", "bold")
+        self.notebook.set_current_page(1) # Switch to logs
+        
+        t = threading.Thread(target=self.run_montecarlo_logic, args=(syspath,))
         t.daemon = True
         t.start()
 
-    def run_montecarlo_logic(self):
-        if not self.syspath:
-            return
-
-        # 1. Get info
-        vendor = create_string_buffer(32)
-        product = create_string_buffer(32)
-        enc_syspath = self.syspath.encode('utf-8')
+    def run_montecarlo_logic(self, syspath):
+        self.spinner.start()
+        GLib.idle_add(self.set_sensitive, False)
         
-        libmc.mc_get_ids(enc_syspath, vendor, product)
-        v_str = vendor.value.decode('utf-8', 'ignore')
-        p_str = product.value.decode('utf-8', 'ignore')
+        enc_syspath = syspath.encode('utf-8')
         
-        GLib.idle_add(self.log, f"Device: Vendor={v_str}, Product={p_str}")
-
-        # 2. List candidates
-        # Create a large buffer. 256 drivers max, 128 bytes each.
+        # 1. List Candidates
         drivers_buf = create_string_buffer(256 * 128)
         count = libmc.mc_list_candidate_drivers(drivers_buf, 256)
         
-        GLib.idle_add(self.log, f"Found {count} candidate drivers.")
+        self.log(f"Found {count} candidate drivers in kernel.")
         
-        if count == 0:
-            GLib.idle_add(self.log, "No candidates found.")
-            GLib.idle_add(self.status_label.set_text, "Failed: No candidates.")
-            GLib.idle_add(self.btn_run.set_sensitive, True)
-            return
-
-        # 3. Iterate
-        found = False
+        found_driver = None
         
         for i in range(count):
-            # Extract string at offset i * 128
             offset = i * 128
             raw_name = drivers_buf[offset:offset+128]
-            # terminate at first null
             name_bytes = raw_name.split(b'\0', 1)[0]
             name = name_bytes.decode('utf-8', 'ignore')
             
-            GLib.idle_add(self.log, f"Testing driver: {name}")
+            self.log(f"Testing candidate: {name}...")
             
             # Load
             if libmc.mc_try_load_driver(name_bytes) == 0:
-                GLib.idle_add(self.log, "  -> Load failed (modprobe).")
+                self.log(f"  -> Load failed.", "red")
                 continue
                 
-            time.sleep(1.0) # Wait for kernel
+            time.sleep(1.0) 
             
-            # Check 1: Sysfs binding
+            # Check Binding
             if libmc.mc_dev_has_driver(enc_syspath):
-                GLib.idle_add(self.log, f"  -> SUCCESS! Device bound to {name}.")
-                found = True
+                self.log(f"  -> MATCH! Device verified bound to {name}.", "green")
+                found_driver = name
                 break
                 
-            # Check 2: Dmesg
+            # Check Dmesg
             if libmc.mc_dmesg_has_activity(name_bytes):
-                GLib.idle_add(self.log, f"  -> SUCCESS! Activity detected for {name}.")
-                found = True
+                self.log(f"  -> PROBABLE MATCH (Dmesg activity) for {name}.", "green")
+                found_driver = name
                 break
-                
-            # Unload if failed
+            
+            # Unload
             libmc.mc_unload_driver(name_bytes)
             
-        if found:
-            GLib.idle_add(self.status_label.set_text, "Success: Driver found.")
+        if found_driver:
+            self.log(f"SUCCESS. Driver {found_driver} is active.", "bold")
         else:
-             GLib.idle_add(self.log, "All candidates failed.")
-             GLib.idle_add(self.status_label.set_text, "Failed: None worked.")
+            self.log("FAILED. No suitable driver found in standard modules.", "red")
 
-        GLib.idle_add(self.btn_run.set_sensitive, True)
-        # Refresh root list
-        GLib.idle_add(self.refresh_drivers)
+        self.spinner.stop()
+        GLib.idle_add(self.set_sensitive, True)
+        GLib.idle_add(self.refresh_devices)
 
-    def log(self, text):
-        end_iter = self.textbuffer.get_end_iter()
-        self.textbuffer.insert(end_iter, text + "\n")
-        adj = self.textview.get_vadjustment()
-        adj.set_value(adj.get_upper() - adj.get_page_size())
+    def socket_listener(self):
+        # Allow connecting/reconnecting
+        while True:
+            try:
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock.connect(SOCK_PATH)
+                self.log("Connected to Daemon.")
+                
+                while True:
+                    data = sock.recv(4096)
+                    if not data: break
+                    try:
+                        msg = json.loads(data.decode("utf-8"))
+                        if msg.get("event") == "add" and "syspath" in msg:
+                            sp = msg["syspath"]
+                            self.log(f"[DAEMON EVENT] Device Added: {sp}", "bold")
+                            GLib.idle_add(self.refresh_devices)
+                            # Could auto-select or auto-run here
+                    except Exception as e:
+                        print(e)
+                sock.close()
+            except:
+                time.sleep(2)
 
-    # --- ROOT MODE HANDLERS ---
-    def refresh_drivers(self):
-        self.store_available.clear()
-        self.store_loaded.clear()
-        
-        # Re-use C function logic or similar for listing, but loaded modules needs /proc/modules
-        # We can implement a helper or just do it in python as before since it is easy.
-        
-        # 1. Candidates from C
-        drivers_buf = create_string_buffer(256 * 128)
-        count = libmc.mc_list_candidate_drivers(drivers_buf, 256)
-        candidates = []
-        for i in range(count):
-            offset = i * 128
-            raw = drivers_buf[offset:offset+128].split(b'\0', 1)[0]
-            candidates.append(raw.decode('utf-8'))
-            
-        # 2. Loaded
-        loaded = []
+
+    def quit_app(self, *args):
         try:
-            with open("/proc/modules", "r") as f:
-                for line in f:
-                    loaded.append(line.split(" ")[0])
-        except: pass
-        
-        for drv in candidates:
-            # Normalize
-            norm = drv.replace("-", "_")
-            is_loaded = any(l.replace("-", "_") == norm for l in loaded)
-            
-            if is_loaded:
-                self.store_loaded.append([drv])
-            else:
-                self.store_available.append([drv])
-
-    def setup_root_ui(self):
-         self.store_available = Gtk.ListStore(str)
-         self.store_loaded = Gtk.ListStore(str)
-         
-         grid = Gtk.Grid()
-         grid.set_column_spacing(10)
-         grid.set_row_spacing(10)
-         grid.set_hexpand(True)
-         grid.set_vexpand(True)
-         
-         # Left Pane
-         frame_avail = Gtk.Frame(label="Available")
-         self.tree_avail = Gtk.TreeView(model=self.store_available)
-         self.tree_avail.append_column(Gtk.TreeViewColumn("Driver", Gtk.CellRendererText(), text=0))
-         scroll_avail = Gtk.ScrolledWindow()
-         scroll_avail.add(self.tree_avail)
-         
-         frame_avail.add(scroll_avail)
-         grid.attach(frame_avail, 0, 0, 1, 1)
-         
-         # Buttons
-         bbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-         bbox.set_valign(Gtk.Align.CENTER)
-         
-         btn_load = Gtk.Button(label="Load >>")
-         btn_load.connect("clicked", self.on_load_clicked)
-         bbox.pack_start(btn_load, False, False, 0)
-         
-         btn_unload = Gtk.Button(label="<< Unload")
-         btn_unload.connect("clicked", self.on_unload_clicked)
-         bbox.pack_start(btn_unload, False, False, 0)
-         
-         grid.attach(bbox, 1, 0, 1, 1)
-         
-         # Right Pane
-         frame_loaded = Gtk.Frame(label="Active")
-         self.tree_loaded = Gtk.TreeView(model=self.store_loaded)
-         self.tree_loaded.append_column(Gtk.TreeViewColumn("Driver", Gtk.CellRendererText(), text=0))
-         scroll_loaded = Gtk.ScrolledWindow()
-         scroll_loaded.add(self.tree_loaded)
-         
-         frame_loaded.add(scroll_loaded)
-         grid.attach(frame_loaded, 2, 0, 1, 1)
-         
-         self.page_root.pack_start(grid, True, True, 0)
-         
-         btn_refresh = Gtk.Button(label="Refresh All")
-         btn_refresh.connect("clicked", lambda w: self.refresh_drivers())
-         self.page_root.pack_start(btn_refresh, False, False, 5)
-         
-         self.sel_avail = self.tree_avail.get_selection()
-         self.sel_loaded = self.tree_loaded.get_selection()
-
-    def on_load_clicked(self, widget):
-        model, treeiter = self.sel_avail.get_selected()
-        if not treeiter: return
-        driver = model[treeiter][0]
-        
-        # Use C function
-        ret = libmc.mc_try_load_driver(driver.encode('utf-8'))
-        if ret:
-            self.log(f"Manual load of {driver} success.")
-        else:
-            self.log(f"Manual load of {driver} failed.")
-        self.refresh_drivers()
-
-    def on_unload_clicked(self, widget):
-        model, treeiter = self.sel_loaded.get_selected()
-        if not treeiter: return
-        driver = model[treeiter][0]
-        
-        libmc.mc_unload_driver(driver.encode('utf-8'))
-        self.log(f"Manual unload of {driver} initiated.")
-        self.refresh_drivers()
+            if os.path.exists(self.pid_file):
+                os.unlink(self.pid_file)
+        except:
+            pass
+        Gtk.main_quit()
 
 if __name__ == "__main__":
     win = MontecarloUI()
-    win.connect("destroy", Gtk.main_quit)
+    win.connect("destroy", win.quit_app)
     win.show_all()
     Gtk.main()

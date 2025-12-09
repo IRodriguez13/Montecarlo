@@ -31,12 +31,14 @@ int main(int argc, char *argv[])
     }
     else if (strcmp(argv[1], "load") == 0)
     {
-        if (argc < 3) return 1;
+        if (argc < 3)
+            return 1;
         return mc_try_load_driver(argv[2]) ? 0 : 1;
     }
     else if (strcmp(argv[1], "unload") == 0)
     {
-        if (argc < 3) return 1;
+        if (argc < 3)
+            return 1;
         mc_unload_driver(argv[2]);
         return 0;
     }

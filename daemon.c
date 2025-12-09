@@ -62,16 +62,18 @@ int init_socket() {
  * Handle client connection.
  * Simplified Protocol: Accept -> Send Target Syspath -> Close.
  */
-void handle_client() {
+void handle_client() 
+{
     struct sockaddr_un client_addr;
     socklen_t len = sizeof(client_addr);
     int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &len);
     if (client_fd == -1) return;
 
     /* Send the current target syspath if available */
-    if (current_syspath[0] != '\0') {
+    if (current_syspath[0] != '\0') 
+    {
         char buf[1024];
-        snprintf(buf, sizeof(buf), "{\"event\": \"add\", \"syspath\": \"%s\"}", current_syspath);
+        snprintf(buf, sizeof(buf), "{\"event\": \"add\", \"syspath\": \"%.900s\"}", current_syspath);
         send(client_fd, buf, strlen(buf), 0);
     } else {
         const char *msg = "{\"event\": \"none\"}";
@@ -88,19 +90,22 @@ int main()
     signal(SIGINT, cleanup);
     signal(SIGTERM, cleanup);
 
-    if (init_socket() == -1) {
+    if (init_socket() == -1) 
+    {
         fprintf(stderr, "[daemon] Failed to init socket\n");
         return 1;
     }
 
     struct udev *udev = udev_new();
-    if (!udev) {
+    if (!udev) 
+    {
         fprintf(stderr, "[daemon] udev_new failed\n");
         return 1;
     }
 
     struct udev_monitor *mon = udev_monitor_new_from_netlink(udev, "udev");
-    if (!mon) {
+    if (!mon) 
+    {
         fprintf(stderr, "[daemon] udev_monitor failed\n");
         return 1;
     }
@@ -112,7 +117,8 @@ int main()
 
     printf("[daemon] Listening on %s and UDev...\n", SOCKET_PATH);
 
-    while (1) {
+    for(;;) 
+    {
         fd_set fds;
         FD_ZERO(&fds);
         FD_SET(server_fd, &fds);
@@ -123,36 +129,60 @@ int main()
         if (select(max_fd + 1, &fds, NULL, NULL, NULL) > 0) {
             
             /* 1. Incoming Socket Connection */
-            if (FD_ISSET(server_fd, &fds)) {
+            if (FD_ISSET(server_fd, &fds)) 
+            {
                 handle_client();
             }
 
             /* 2. Incoming UDev Event */
-            if (FD_ISSET(udev_fd, &fds)) {
+            if (FD_ISSET(udev_fd, &fds)) 
+            {
                 struct udev_device *dev = udev_monitor_receive_device(mon);
-                if (dev) {
+                if (dev) 
+                {
                     const char *action = udev_device_get_action(dev);
                     const char *syspath = udev_device_get_syspath(dev);
 
-                    if (action && strcmp(action, "add") == 0) {
+                    if (action && strcmp(action, "add") == 0) 
+                    {
                         printf("[daemon] add: %s\n", syspath);
                         
                         /* Check if the device already has a driver bound (ignoring interfaces) */
-                        if (mc_dev_has_driver(syspath)) {
+                        if (mc_dev_has_driver(syspath)) 
+                        {
                             printf("[daemon] Driver already present. Ignoring.\n");
                             current_syspath[0] = '\0';
-                        } else {
+                        } else 
+                        {
                             printf("[daemon] No driver found. Triggering UI.\n");
                             strncpy(current_syspath, syspath, sizeof(current_syspath) - 1);
                             
-                            /* Launch the User Interface */
-                            pid_t pid = fork();
-                            if (pid == 0) {
+                            /* Check if UI is already running */
+                            int ui_running = 0;
+                            FILE *pf = fopen("/tmp/montecarlo_ui.pid", "r");
+                            if (pf) {
+                                int pid;
+                                if (fscanf(pf, "%d", &pid) == 1) {
+                                    if (kill(pid, 0) == 0) {
+                                        ui_running = 1;
+                                    }
+                                }
+                                fclose(pf);
+                            }
+
+                            if (ui_running) {
+                                printf("[daemon] UI already running (PID found). Skipping launch.\n");
+                            } else {
+                                /* Launch the User Interface */
+                                pid_t pid = fork();
+                            if (pid == 0) 
+                            {
                                 /* Child Process */
                                 setenv("DISPLAY", ":0", 0); /* Hack for demo environment */
                                 
                                 /* Path Logic */
-                                if (getenv("MONTECARLO_DEV")) {
+                                if (getenv("MONTECARLO_DEV")) 
+                                {
                                     /* Dev Mode: ui.py in cwd */
                                     printf("[daemon] Launching UI in DEV mode (cwd)\n");
                                     execlp("python3", "python3", "ui.py", NULL);
@@ -167,10 +197,14 @@ int main()
                                 exit(1);
                             } else {
                                 /* Parent Process: Continue monitoring */
+                                continue;
+                                }
                             }
                         }
-                    } else if (action && strcmp(action, "remove") == 0) {
-                         if (syspath && strcmp(syspath, current_syspath) == 0) {
+                    } else if (action && strcmp(action, "remove") == 0) 
+                    {
+                         if (syspath && strcmp(syspath, current_syspath) == 0) 
+                         {
                              current_syspath[0] = '\0';
                          }
                     }

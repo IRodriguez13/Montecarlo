@@ -1,0 +1,22 @@
+#!/bin/sh
+set -e
+
+#DEBHELPER#
+
+if [ "$1" = "configure" ]; then
+    # Reload udev rules to pick up any changes (if we had rules, but good practice)
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules || true
+        udevadm trigger || true
+    fi
+
+    # Enable and start the service
+    # dh_installsystemd handles this usually, but explicit check doesn't hurt if helpers fail
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload || true
+        systemctl enable montecarlo.service || true
+        systemctl restart montecarlo.service || true
+    fi
+fi
+
+exit 0

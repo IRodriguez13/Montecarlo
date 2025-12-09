@@ -11,6 +11,19 @@ extern "C" {
 int mc_read_sysattr(const char *path, char *buf, size_t buflen);
 void mc_get_ids(const char *syspath, char *vendor, char *product);
 int mc_list_candidate_drivers(char out[][128], int max);
+
+// List all connected USB devices [syspath, vendor:product, driver, name]
+// out format: flat structure or specialized struct.
+// For simplicity in FFI: flatten logic or uses simple struct array.
+// Let's use a struct definition that Python can map.
+typedef struct {
+    char syspath[256];
+    char vidpid[32];
+    char product[128];
+    char driver[64];
+} mc_device_info_t;
+
+int mc_list_all_usb_devices(mc_device_info_t *out, int max);
 int mc_try_load_driver(const char *driver);
 void mc_unload_driver(const char *driver);
 int mc_dmesg_has_activity(const char *driver);
