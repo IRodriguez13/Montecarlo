@@ -32,13 +32,17 @@ int main(int argc, char *argv[])
     else if (strcmp(argv[1], "load") == 0)
     {
         if (argc < 3)
+        {
             return 1;
+        }
         return mc_try_load_driver(argv[2]) ? 0 : 1;
     }
     else if (strcmp(argv[1], "unload") == 0)
     {
         if (argc < 3)
+        {
             return 1;
+        }
         mc_unload_driver(argv[2]);
         return 0;
     }
@@ -65,9 +69,7 @@ void mc_run(const char *syspath)
 
     printf("[mc] vendor=%s product=%s\n", vendor, product);
 
-    /* --------------------------------------------------------- */
-    /* LIST CANDIDATE DRIVERS                                    */
-    /* --------------------------------------------------------- */
+    /* LIST CANDIDATE DRIVERS */
     char drivers[256][128];
     int total = mc_list_candidate_drivers(drivers, 256);
 
@@ -79,9 +81,7 @@ void mc_run(const char *syspath)
         return;
     }
 
-    /* --------------------------------------------------------- */
-    /* MONTE CARLO LOOP                                          */
-    /* --------------------------------------------------------- */
+    /* MONTE CARLO LOOP */
     struct udev *udev = udev_new();
     if (!udev)
     {
@@ -137,9 +137,7 @@ void mc_run(const char *syspath)
         mc_unload_driver(drv);
     }
 
-    /* --------------------------------------------------------- */
-    /* IF WE REACH HERE, NO DRIVER WORKED and this is terrible                        */
-    /* --------------------------------------------------------- */
+    /* IF WE REACH HERE, NO DRIVER WORKED and this is terrible */
     printf("[mc] No compatible driver found :-(.\n");
 
     udev_device_unref(dev);

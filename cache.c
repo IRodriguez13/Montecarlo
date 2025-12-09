@@ -5,12 +5,14 @@
 
 #define CACHE_PATH "/var/lib/ir0-usb/cache.json"
 
-// Guarda: "vendor:product" → driver
+// Guarda: "vendor:product" -> driver
 int cache_save(const char *vendor, const char *product, const char *driver)
 {
     FILE *f = fopen(CACHE_PATH, "a");
     if (!f)
+    {
         return 0;
+    }
 
     time_t t = time(NULL);
 

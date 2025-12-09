@@ -34,7 +34,9 @@ int main(int argc, char *argv[])
     // Subir por la jerarquía hasta encontrar el dispositivo USB real
     struct udev_device *usb = dev;
     while (usb && strcmp(udev_device_get_subsystem(usb), "usb") != 0)
+    {
         usb = udev_device_get_parent(usb);
+    }
 
     if (!usb)
     {
@@ -48,8 +50,14 @@ int main(int argc, char *argv[])
     const char *vendor = udev_device_get_sysattr_value(usb, "idVendor");
     const char *product = udev_device_get_sysattr_value(usb, "idProduct");
 
-    if (!vendor)  vendor  = "(unknown)";
-    if (!product) product = "(unknown)";
+    if (!vendor)
+    {
+        vendor = "(unknown)";
+    }
+    if (!product)
+    {
+        product = "(unknown)";
+    }
 
     printf("[worker] iniciado para: %s\n", devpath);
     printf("[worker] vendor:  %s\n", vendor);
@@ -61,4 +69,3 @@ int main(int argc, char *argv[])
 
     return 0;
 }
-

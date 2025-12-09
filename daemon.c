@@ -18,9 +18,11 @@ static int server_fd = -1;
 static char current_syspath[1024] = {0};
 
 /* Cleanup resources on exit */
-void cleanup(int signum) {
+void cleanup(int signum)
+{
     (void)signum;
-    if (server_fd != -1) {
+    if (server_fd != -1)
+    {
         close(server_fd);
     }
     unlink(SOCKET_PATH);
@@ -28,10 +30,12 @@ void cleanup(int signum) {
 }
 
 /* Initialize Unix Domain Socket */
-int init_socket() {
+int init_socket()
+{
     struct sockaddr_un addr;
 
-    if ((server_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
+    if ((server_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
+    {
         perror("[daemon] socket error");
         return -1;
     }
@@ -42,12 +46,14 @@ int init_socket() {
 
     unlink(SOCKET_PATH);
 
-    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
+    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) == -1)
+    {
         perror("[daemon] bind error");
         return -1;
     }
 
-    if (listen(server_fd, 5) == -1) {
+    if (listen(server_fd, 5) == -1)
+    {
         perror("[daemon] listen error");
         return -1;
     }
@@ -67,7 +73,10 @@ void handle_client()
     struct sockaddr_un client_addr;
     socklen_t len = sizeof(client_addr);
     int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &len);
-    if (client_fd == -1) return;
+    if (client_fd == -1)
+    {
+        return;
+    }
 
     /* Send the current target syspath if available */
     if (current_syspath[0] != '\0') 
@@ -75,7 +84,9 @@ void handle_client()
         char buf[1024];
         snprintf(buf, sizeof(buf), "{\"event\": \"add\", \"syspath\": \"%.900s\"}", current_syspath);
         send(client_fd, buf, strlen(buf), 0);
-    } else {
+    }
+    else
+    {
         const char *msg = "{\"event\": \"none\"}";
         send(client_fd, msg, strlen(msg), 0);
     }
@@ -117,7 +128,7 @@ int main()
 
     printf("[daemon] Listening on %s and UDev...\n", SOCKET_PATH);
 
-    for(;;) 
+    for (;;) 
     {
         fd_set fds;
         FD_ZERO(&fds);
@@ -126,7 +137,8 @@ int main()
 
         int max_fd = (server_fd > udev_fd) ? server_fd : udev_fd;
 
-        if (select(max_fd + 1, &fds, NULL, NULL, NULL) > 0) {
+        if (select(max_fd + 1, &fds, NULL, NULL, NULL) > 0)
+        {
             
             /* 1. Incoming Socket Connection */
             if (FD_ISSET(server_fd, &fds)) 
@@ -152,7 +164,8 @@ int main()
                         {
                             printf("[daemon] Driver already present. Ignoring.\n");
                             current_syspath[0] = '\0';
-                        } else 
+                        }
+                        else 
                         {
                             printf("[daemon] No driver found. Triggering UI.\n");
                             strncpy(current_syspath, syspath, sizeof(current_syspath) - 1);
@@ -160,48 +173,59 @@ int main()
                             /* Check if UI is already running */
                             int ui_running = 0;
                             FILE *pf = fopen("/tmp/montecarlo_ui.pid", "r");
-                            if (pf) {
+                            if (pf)
+                            {
                                 int pid;
-                                if (fscanf(pf, "%d", &pid) == 1) {
-                                    if (kill(pid, 0) == 0) {
+                                if (fscanf(pf, "%d", &pid) == 1)
+                                {
+                                    if (kill(pid, 0) == 0)
+                                    {
                                         ui_running = 1;
                                     }
                                 }
                                 fclose(pf);
                             }
 
-                            if (ui_running) {
+                            if (ui_running)
+                            {
                                 printf("[daemon] UI already running (PID found). Skipping launch.\n");
-                            } else {
+                            }
+                            else
+                            {
                                 /* Launch the User Interface */
                                 pid_t pid = fork();
-                            if (pid == 0) 
-                            {
-                                /* Child Process */
-                                setenv("DISPLAY", ":0", 0); /* Hack for demo environment */
-                                
-                                /* Path Logic */
-                                if (getenv("MONTECARLO_DEV")) 
+                                if (pid == 0) 
                                 {
-                                    /* Dev Mode: ui.py in cwd */
-                                    printf("[daemon] Launching UI in DEV mode (cwd)\n");
-                                    execlp("python3", "python3", "ui.py", NULL);
-                                } else {
-                                    /* Prod Mode: ui.py in /usr/share/montecarlo */
-                                    /* We call python3 directly on the full path */
-                                    execlp("python3", "python3", "/usr/share/montecarlo/ui.py", NULL);
+                                    /* Child Process */
+                                    setenv("DISPLAY", ":0", 0); /* Hack for demo environment */
+                                    
+                                    /* Path Logic */
+                                    if (getenv("MONTECARLO_DEV")) 
+                                    {
+                                        /* Dev Mode: ui.py in cwd */
+                                        printf("[daemon] Launching UI in DEV mode (cwd)\n");
+                                        execlp("python3", "python3", "ui.py", NULL);
+                                    }
+                                    else
+                                    {
+                                        /* Prod Mode: ui.py in /usr/share/montecarlo */
+                                        /* We call python3 directly on the full path */
+                                        execlp("python3", "python3", "/usr/share/montecarlo/ui.py", NULL);
+                                    }
+                                    
+                                    /* If execlp returns, it failed */
+                                    perror("[daemon] execlp failed");
+                                    exit(1);
                                 }
-                                
-                                /* If execlp returns, it failed */
-                                perror("[daemon] execlp failed");
-                                exit(1);
-                            } else {
-                                /* Parent Process: Continue monitoring */
-                                continue;
+                                else
+                                {
+                                    /* Parent Process: Continue monitoring */
+                                    continue;
                                 }
                             }
                         }
-                    } else if (action && strcmp(action, "remove") == 0) 
+                    }
+                    else if (action && strcmp(action, "remove") == 0) 
                     {
                          if (syspath && strcmp(syspath, current_syspath) == 0) 
                          {

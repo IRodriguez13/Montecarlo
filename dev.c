@@ -6,7 +6,9 @@
 bool dev_has_driver(struct udev_device *dev)
 {
     if (!dev)
+    {
         return false;
+    }
 
     struct udev_device *parent = dev;
     const char *sub;
@@ -16,12 +18,17 @@ bool dev_has_driver(struct udev_device *dev)
            strcmp(sub, "usb") != 0)
     {
         struct udev_device *p = udev_device_get_parent(parent);
-        if (!p) break;
+        if (!p) 
+        {
+            break;
+        }
         parent = p;
     }
 
     if (!parent)
+    {
         return false;
+    }
 
     const char *driver = udev_device_get_driver(parent);
 
@@ -34,4 +41,3 @@ bool dev_has_driver(struct udev_device *dev)
     printf("[dev] no hay driver\n");
     return false;
 }
-
