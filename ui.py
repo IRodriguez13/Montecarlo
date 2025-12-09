@@ -11,6 +11,7 @@ from ctypes import CDLL, c_int, c_char_p, c_char, POINTER, create_string_buffer,
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib, Pango
+import webbrowser
 
 # --- CONFIG & LIBS ---
 SOCK_PATH = "/tmp/montecarlo.sock"
@@ -125,7 +126,7 @@ class MontecarloUI(Gtk.Window):
         
         btn_refresh = Gtk.Button(label="Rescan Devices")
         btn_refresh.set_image(Gtk.Image.new_from_icon_name("view-refresh", Gtk.IconSize.BUTTON))
-        btn_refresh.connect("clicked", lambda w: self.refresh_devices())
+        btn_refresh.connect("clicked", self.on_refresh_clicked)
         toolbar.pack_start(btn_refresh, False, False, 0)
         
         toolbar.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 10)
@@ -142,13 +143,16 @@ class MontecarloUI(Gtk.Window):
         
         self.dash_box.pack_start(toolbar, False, False, 0)
         
-        # Device List
+        # Paned view for List / Details
+        paned = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
+        self.dash_box.pack_start(paned, True, True, 0)
+        
+        # A) Device List
         # Model: Syspath, VidPid, Product, Driver, IconName
         self.dev_store = Gtk.ListStore(str, str, str, str, str)
         self.dev_tree = Gtk.TreeView(model=self.dev_store)
         
         # Columns
-        # Icon + Product
         col_prod = Gtk.TreeViewColumn("Device")
         cell_pix = Gtk.CellRendererPixbuf()
         col_prod.pack_start(cell_pix, False)
@@ -161,7 +165,6 @@ class MontecarloUI(Gtk.Window):
         
         self.dev_tree.append_column(Gtk.TreeViewColumn("ID", Gtk.CellRendererText(), text=1))
         
-        # Driver Column (Bold if None)
         col_drv = Gtk.TreeViewColumn("Driver")
         cell_drv = Gtk.CellRendererText()
         col_drv.pack_start(cell_drv, True)
@@ -170,13 +173,36 @@ class MontecarloUI(Gtk.Window):
         
         self.dev_tree.get_selection().connect("changed", self.on_dev_selection_changed)
         
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_vexpand(True)
-        scroll.add(self.dev_tree)
-        self.dash_box.pack_start(scroll, True, True, 0)
+        scroll_list = Gtk.ScrolledWindow()
+        scroll_list.set_vexpand(True)
+        scroll_list.add(self.dev_tree)
+        paned.pack1(scroll_list, resize=True, shrink=False)
+
+        # B) Details Pane
+        frame_details = Gtk.Frame(label="Device Details")
+        self.details_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        self.details_box.set_border_width(10)
         
+        self.lbl_detail_name = Gtk.Label(label="Select a device to view details.", xalign=0)
+        self.lbl_detail_id = Gtk.Label(label="", xalign=0)
+        self.lbl_detail_path = Gtk.Label(label="", xalign=0)
+        self.btn_web_search = Gtk.Button(label="Search on Web")
+        self.btn_web_search.set_valign(Gtk.Align.START)
+        self.btn_web_search.set_halign(Gtk.Align.START)
+        self.btn_web_search.set_sensitive(False)
+        self.btn_web_search.connect("clicked", self.on_web_search_clicked)
+        
+        self.details_box.pack_start(self.lbl_detail_name, False, False, 0)
+        self.details_box.pack_start(self.lbl_detail_id, False, False, 0)
+        self.details_box.pack_start(self.lbl_detail_path, False, False, 0)
+        self.details_box.pack_start(self.btn_web_search, False, False, 5)
+        
+        frame_details.add(self.details_box)
+        paned.pack2(frame_details, resize=False, shrink=False)
+
         self.notebook.append_page(self.dash_box, Gtk.Label(label="Devices Dashboard"))
 
+    # ... Telemetry log logic remains same ...
     def build_telemetry_tab(self):
         self.tele_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
         self.tele_box.set_border_width(10)
@@ -218,41 +244,80 @@ class MontecarloUI(Gtk.Window):
 
     # --- LOGIC ---
 
+    def on_refresh_clicked(self, widget):
+        self.refresh_devices()
+
     def refresh_devices(self):
         self.log("Scanning USB devices...")
-        self.dev_store.clear()
-        
+        self.spinner.start()
+        # Run scan in thread to avoid freezing UI for spinner
+        t = threading.Thread(target=self._refresh_thread)
+        t.daemon = True
+        t.start()
+
+    def _refresh_thread(self):
         max_devs = 64
         arr = (MCDeviceInfo * max_devs)()
         count = libmc.mc_list_all_usb_devices(arr, max_devs)
         
-        self.log(f"Scan complete. Found {count} devices.")
-        
-        for i in range(count):
-            d = arr[i]
-            syspath = d.syspath.decode('utf-8', 'ignore')
-            vidpid = d.vidpid.decode('utf-8', 'ignore')
-            product = d.product.decode('utf-8', 'ignore')
-            driver = d.driver.decode('utf-8', 'ignore')
+        def _update():
+            self.dev_store.clear()
+            self.log(f"Scan complete. Found {count} devices.")
             
-            icon = "input-mouse" # default generic
-            if "None" in driver:
-                icon = "dialog-warning" # Alert user
-            elif "hub" in driver:
-                icon = "computer"
-            else:
-                icon = "drive-harddisk"
+            for i in range(count):
+                d = arr[i]
+                syspath = d.syspath.decode('utf-8', 'ignore')
+                vidpid = d.vidpid.decode('utf-8', 'ignore')
+                product = d.product.decode('utf-8', 'ignore')
+                driver = d.driver.decode('utf-8', 'ignore')
+                
+                icon = "input-mouse" 
+                if "None" in driver:
+                    icon = "dialog-warning" 
+                elif "hub" in driver:
+                    icon = "computer"
+                else:
+                    icon = "drive-harddisk"
+                
+                self.dev_store.append([syspath, vidpid, product, driver, icon])
             
-            self.dev_store.append([syspath, vidpid, product, driver, icon])
+            self.spinner.stop()
+            
+        GLib.idle_add(_update)
 
     def on_dev_selection_changed(self, selection):
         model, treeiter = selection.get_selected()
         if treeiter:
             self.btn_auto.set_sensitive(True)
             self.btn_unload.set_sensitive(True)
+            self.btn_web_search.set_sensitive(True)
+            
+            # Update Details
+            syspath = model[treeiter][0]
+            vidpid = model[treeiter][1]
+            product = model[treeiter][2]
+            
+            self.lbl_detail_name.set_markup(f"<b>Device:</b> {product}")
+            self.lbl_detail_id.set_markup(f"<b>ID:</b> {vidpid}")
+            self.lbl_detail_path.set_text(f"Path: {syspath}")
+            
         else:
             self.btn_auto.set_sensitive(False)
             self.btn_unload.set_sensitive(False)
+            self.btn_web_search.set_sensitive(False)
+            self.lbl_detail_name.set_text("Select a device to view details.")
+            self.lbl_detail_id.set_text("")
+            self.lbl_detail_path.set_text("")
+
+    def on_web_search_clicked(self, widget):
+        model, treeiter = self.dev_tree.get_selection().get_selected()
+        if not treeiter: return
+        vidpid = model[treeiter][1]
+        
+        # Open Google or DeviceHunt
+        url = f"https://www.google.com/search?q=linux+usb+driver+{vidpid}"
+        self.log(f"Opening browser for {vidpid}...")
+        webbrowser.open(url)
 
     def on_unload_clicked(self, widget):
         model, treeiter = self.dev_tree.get_selection().get_selected()
@@ -263,6 +328,24 @@ class MontecarloUI(Gtk.Window):
             self.log("Device has no driver to unload.", "red")
             return
             
+        # SAFETY DIALOG
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text="Unload Driver?"
+        )
+        dialog.format_secondary_text(
+            f"Unloading '{driver}' may stop your device from working or destabilize the system.\n\nAre you sure you want to continue?"
+        )
+        response = dialog.run()
+        dialog.destroy()
+        
+        if response != Gtk.ResponseType.OK:
+            self.log("Unload cancelled by user.")
+            return
+
         self.log(f"Unloading driver {driver}...", "bold")
         libmc.mc_unload_driver(driver.encode('utf-8'))
         
@@ -273,8 +356,27 @@ class MontecarloUI(Gtk.Window):
         model, treeiter = self.dev_tree.get_selection().get_selected()
         if not treeiter: return
         
-        syspath = model[treeiter][0]
         name = model[treeiter][2]
+        
+        # SAFETY DIALOG
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text="Start Brute-Force Driver Search?"
+        )
+        dialog.format_secondary_text(
+            f"Montecarlo will attempt to load kernel modules one by one for '{name}'.\n\nRisk: Low to Moderate. This might cause temporary system freezes.\n\nContinue?"
+        )
+        response = dialog.run()
+        dialog.destroy()
+        
+        if response != Gtk.ResponseType.OK:
+            self.log("Auto-Find cancelled by user.")
+            return
+        
+        syspath = model[treeiter][0]
         
         self.log(f"Starting Montecarlo Auto-Find for: {name}", "bold")
         self.notebook.set_current_page(1) # Switch to logs
