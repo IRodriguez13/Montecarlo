@@ -1,6 +1,52 @@
 # Monte Carlo Driver Manager
 
-Monte Carlo is an automated driver management tool for Linux, designed to detect devices without drivers and sequentially test candidate drivers until a match is found.
+Monte Carlo is an advanced, automated driver management tool for Linux. It abstracts the complexity of kernel modules, allowing users to probe, load, and manage USB drivers safely and efficiently.
+
+It is designed to detect devices without drivers and help users find the correct module, while actively preventing system instability through rigorous safety checks.
+
+---
+
+## Key Features
+
+### 🛡️ Active Safety System
+Montecarlo prioritizes system stability.
+*   **Dependency Protection**: Before unloading a module, it checks for dependent modules (holders) and blocks the action if it would break other drivers.
+*   **Hardware Locking**: It detects if a driver is currently controlling active hardware (e.g., your mouse or keyboard) and prevents accidental unloading.
+
+### 🧠 Smart Dashboard
+The dashboard provides a clean, noise-free view of your system.
+*   **Intelligent Filtering**: Automatically hides internal kernel dependencies, showing only the "Root Modules" that you actually installed or loaded.
+*   **Status Indicators**: Clearly marks drivers as `(In Use)` or `(Idle)` with distinct icons.
+
+---
+
+## User Interface
+
+### 1. The Dashboard
+Your command center. View all loaded USB drivers in real-time. The list is filtered to remove kernel noise, focusing on the drivers that matter.
+
+![Dashboard Main View](Assets/Dash.png)
+*Active drivers are verified against hardware bindings.*
+
+### 2. Available Modules (Repository)
+Don't know which driver to use? Browse your kernel's native module repository. You can search, filter, and load drivers dynamically to test compatibility.
+
+![Module Repository](Assets/Modules.png)
+*Search and load drivers specific to your kernel version.*
+
+### 3. Telemetry & Logs
+Transparency is key. Watch Montecarlo's decision-making process in real-time. See exactly what the daemon is doing, which devices are detected, and why a driver is allowed or blocked.
+
+![Real-time Logs](Assets/Logs.png)
+*Detailed audit log of all actions.*
+
+### 4. Restore & History
+Made a mistake? The Restore tab keeps a history of all modules unloaded during the session, allowing you to quickly reload them with a single click.
+
+![Restore History](Assets/Restore.png)
+*Undo capabilities for driver management.*
+
+---
 
 ## Architecture
 
@@ -29,25 +75,6 @@ graph TD
     Lib -->|Checks Binding/Dmesg| Drivers
 ```
 
-## The Pipeline
-
-1.  **Detection**: The Daemon monitors UDev for new USB/HID devices.
-2.  **Verification**: It checks `libmontecarlo` to see if the device already has a driver bound.
-3.  **Trigger**: If no driver is found, the Daemon launches the Python UI and passes the device path via Unix Socket.
-4.  **Monte Carlo Process**:
-    *   The UI calls the shared library to list candidate drivers.
-    *   It iterates through the list sequentially:
-        1.  **Load**: `modprobe <driver>`
-        2.  **Wait**: Sleep for kernel registration.
-        3.  **Check**: Verify if the device bound to the driver or generated kernel logs (dmesg).
-        4.  **Action**:
-            *   **Success**: Keep driver loaded, cache result, and stop.
-            *   **Failure**: Unload driver (`modprobe -r`) and try the next one.
-
-## License
-
-This project is licensed under the **GNU General Public License v3.0 (GPLv3)**.
-
 ## Installation and Testing
 
 ### Prerequisites
@@ -58,32 +85,20 @@ This project is licensed under the **GNU General Public License v3.0 (GPLv3)**.
 ### Build
 ```bash
 # Clone the repository
-git clone https://github.com/YourUsername/Montecarlo.git
+git clone https://github.com/IRodriguez13/Montecarlo.git
 cd Montecarlo
 
 # Build Daemon and Shared Library
 make
+```
 
-### Packaging (.deb)
-To build a Debian package (requires `devscripts`, `debhelper`):
+### Run Locally (Dev Mode)
+To test the UI without installing the system service:
 
 ```bash
-dpkg-buildpackage -us -uc
+sudo MONTECARLO_DEV=1 python3 ui.py
 ```
-```
 
-### Local Testing
-To test the pipeline without installing the service system-wide:
+## License
 
-1.  **Start the Daemon**:
-    ```bash
-    sudo ./montecarlo-daemon
-    ```
-    *The daemon will print "Listening on /tmp/montecarlo.sock".*
-
-2.  **Simulate UI (or wait for device insertion)**:
-    If you don't have a device to trigger the daemon, you can launch the UI manually for testing (requires root for driver operations):
-    ```bash
-    sudo python3 ui.py [syspath_to_debug]
-    ```
-    *If triggered by Daemon, it will launch automatically.*
+This project is licensed under the **GNU General Public License v3.0 (GPLv3)**.
