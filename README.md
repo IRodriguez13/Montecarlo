@@ -25,25 +25,25 @@ The dashboard provides a clean, noise-free view of your system.
 ### 1. The Dashboard
 Your command center. View all loaded USB drivers in real-time. The list is filtered to remove kernel noise, focusing on the drivers that matter.
 
-![Dashboard Main View](Assets/Dash.png)
+![Dashboard Main View](Assets/dash.png)
 *Active drivers are verified against hardware bindings.*
 
 ### 2. Available Modules (Repository)
 Don't know which driver to use? Browse your kernel's native module repository. You can search, filter, and load drivers dynamically to test compatibility.
 
-![Module Repository](Assets/Modules.png)
+![Module Repository](Assets/modls.png)
 *Search and load drivers specific to your kernel version.*
 
 ### 3. Telemetry & Logs
 Transparency is key. Watch Montecarlo's decision-making process in real-time. See exactly what the daemon is doing, which devices are detected, and why a driver is allowed or blocked.
 
-![Real-time Logs](Assets/Logs.png)
+![Real-time Logs](Assets/logs.png)
 *Detailed audit log of all actions.*
 
 ### 4. Restore & History
 Made a mistake? The Restore tab keeps a history of all modules unloaded during the session, allowing you to quickly reload them with a single click.
 
-![Restore History](Assets/Restore.png)
+![Restore History](Assets/restore.png)
 *Undo capabilities for driver management.*
 
 ---
