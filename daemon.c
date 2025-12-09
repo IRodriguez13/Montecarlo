@@ -158,7 +158,14 @@ int main()
                     if (action && strcmp(action, "add") == 0) 
                     {
                         printf("[daemon] add: %s\n", syspath);
-                        
+
+                        /* Check exclusion (Mass Storage) */
+                        if (mc_is_excluded_device(syspath))
+                        {
+                            printf("[daemon] Ignoring Mass Storage device: %s\n", syspath);
+                            continue;
+                        }
+
                         /* Check if the device already has a driver bound (ignoring interfaces) */
                         if (mc_dev_has_driver(syspath)) 
                         {

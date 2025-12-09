@@ -472,3 +472,51 @@ int mc_driver_is_in_use(const char *driver)
     
     return 0;
 }
+/* CHECK IF DEVICE SHOULD BE EXCLUDED (e.g. Mass Storage) */
+int mc_is_excluded_device(const char *syspath)
+{
+    struct udev *udev = udev_new();
+    if (!udev) return 0;
+
+    struct udev_device *dev = udev_device_new_from_syspath(udev, syspath);
+    if (!dev)
+    {
+        udev_unref(udev);
+        return 0;
+    }
+
+    /* Check 1: bDeviceClass on device itself (rare for USB devices, usually 00) */
+    const char *dclass = udev_device_get_sysattr_value(dev, "bDeviceClass");
+    if (dclass  && strcmp(dclass, "08") == 0)
+    {
+        udev_device_unref(dev);
+        udev_unref(udev);
+        return 1;
+    }
+
+    /* Check 2: bInterfaceClass on the interface (syspath points to interface) */
+    const char *iclass = udev_device_get_sysattr_value(dev, "bInterfaceClass");
+    if (iclass && strcmp(iclass, "08") == 0)
+    {
+        udev_device_unref(dev);
+        udev_unref(udev);
+        return 1;
+    }
+
+    /* Check 3: Walk up to parent to check device class if interface didn't match */
+    struct udev_device *parent = udev_device_get_parent_with_subsystem_devtype(dev, "usb", "usb_device");
+    if (parent)
+    {
+        const char *pclass = udev_device_get_sysattr_value(parent, "bDeviceClass");
+        if (pclass && strcmp(pclass, "08") == 0)
+        {
+            udev_device_unref(dev);
+            udev_unref(udev);
+            return 1;
+        }
+    }
+
+    udev_device_unref(dev);
+    udev_unref(udev);
+    return 0;
+}

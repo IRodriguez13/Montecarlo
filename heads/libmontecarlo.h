@@ -1,5 +1,4 @@
-#ifndef LIBMONTECARLO_H
-#define LIBMONTECARLO_H
+#pragma once
 
 #ifdef __cplusplus
 extern "C" {
@@ -7,15 +6,11 @@ extern "C" {
 
 #include <stddef.h>
 
-// Core Driver Operations
+/*Core Driver Operations*/
 int mc_read_sysattr(const char *path, char *buf, size_t buflen);
 void mc_get_ids(const char *syspath, char *vendor, char *product);
 int mc_list_candidate_drivers(char out[][128], int max);
 
-// List all connected USB devices [syspath, vendor:product, driver, name]
-// out format: flat structure or specialized struct.
-// For simplicity in FFI: flatten logic or uses simple struct array.
-// Let's use a struct definition that Python can map.
 typedef struct {
     char syspath[256];
     char vidpid[32];
@@ -33,11 +28,11 @@ int mc_get_module_refcount(const char *module);
 int mc_list_loaded_modules(char *out_buf, int max_size);
 int mc_driver_is_in_use(const char *driver);
 
-// High level checks
+/*High level checks*/
 int mc_dev_has_driver(const char *syspath);
+int mc_is_excluded_device(const char *syspath);
+
 
 #ifdef __cplusplus
 }
 #endif
-
-#endif // LIBMONTECARLO_H

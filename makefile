@@ -32,6 +32,8 @@ dev: clean $(TARGET_LIB)
 	$(CC) $(CFLAGS) -o $(TARGET_DAEMON) daemon.c -L. -lmontecarlo $(LDFLAGS) -Wl,-rpath=.
 	$(CC) $(CFLAGS) -o $(TARGET_CLI) montecarlo.c cache.c -L. -lmontecarlo $(LDFLAGS) -Wl,-rpath=.
 	@echo "Built for local development (RPATH set)."
+	@echo "Launching UI..."
+	sudo MONTECARLO_DEV=1 python3 ui.py
 
 install: all
 	install -d $(DESTDIR)$(BINDIR)
