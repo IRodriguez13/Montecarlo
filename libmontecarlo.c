@@ -328,6 +328,38 @@ int mc_list_all_usb_devices(mc_device_info_t *out, int max)
     return count;
 }
 
+/* CHECK IF MODULE HAS HOLDERS */
+// Returns 1 if /sys/module/<name>/holders is NOT empty (module is a dependency).
+// Returns 0 if empty (independent module).
+int mc_module_has_holders(const char *module)
+{
+    char path[256];
+    snprintf(path, sizeof(path), "/sys/module/%s/holders", module);
+    
+    DIR *dir = opendir(path);
+    if (!dir)
+    {
+        return 0; // If holders dir doesn't exist, assume no holders (or built-in?)
+    }
+    
+    struct dirent *ent;
+    int has_holders = 0;
+    
+    while ((ent = readdir(dir)) != NULL)
+    {
+        if (ent->d_name[0] == '.') 
+        {
+            continue;
+        }
+        // Found a holder!
+        has_holders = 1;
+        break;
+    }
+    
+    closedir(dir);
+    return has_holders;
+}
+
 /* CHECK MODULE USE COUNT */
 int mc_get_module_refcount(const char *module)
 {

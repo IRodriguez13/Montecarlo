@@ -58,8 +58,11 @@ libmc.mc_dmesg_has_activity.restype = c_int
 libmc.mc_get_module_refcount.argtypes = [c_char_p]
 libmc.mc_get_module_refcount.restype = c_int
 
-libmc.mc_driver_is_in_use.argtypes = [c_char_p]
-libmc.mc_driver_is_in_use.restype = c_int
+libmc.mc_module_has_holders.argtypes = [ctypes.c_char_p]
+libmc.mc_module_has_holders.restype = ctypes.c_int
+
+libmc.mc_driver_is_in_use.argtypes = [ctypes.c_char_p]
+libmc.mc_driver_is_in_use.restype = ctypes.c_int
 
 libmc.mc_list_candidate_drivers.argtypes = [POINTER(c_char), c_int]
 libmc.mc_list_candidate_drivers.restype = c_int
@@ -517,12 +520,6 @@ class MontecarloUI(Gtk.Window):
         btn_link.connect("clicked", lambda x: self.open_url("https://github.com/IRodriguez13/Montecarlo"))
         vbox.pack_start(btn_link, False, False, 0)
         
-        # Raw Link Label (fail-safe)
-        lbl_link = Gtk.Label()
-        lbl_link.set_markup("<a href='https://github.com/IRodriguez13/Montecarlo'>https://github.com/IRodriguez13/Montecarlo</a>")
-        lbl_link.set_selectable(True)
-        vbox.pack_start(lbl_link, False, False, 0)
-        
         # Credits
         credits = Gtk.Label(label="Developed by I. Rodriguez")
         credits.get_style_context().add_class("dim-label")
@@ -693,7 +690,22 @@ class MontecarloUI(Gtk.Window):
                     pass
                 
                 # Check actual usage
+                # UX RULE: Dependency Filtering
+                # If module has holders -> It is a dependency -> DO NOT SHOW in Dashboard.
+                # Only show "root" modules (holders is empty).
+                has_holders = libmc.mc_module_has_holders(mod.encode('utf-8'))
+                if has_holders:
+                     continue
+                
                 in_use = libmc.mc_driver_is_in_use(mod.encode('utf-8'))
+                
+                # Additional check: If not in use, but refcount > 0, strict kernel logic says it's in use.
+                # But the 'holders' check usually covers the dependency part.
+                # We trust 'holders' for the UX filtering.
+                
+                # The original code had `status_str` and `status_tag` defined here.
+                # Assuming `explicit_drivers` is not meant to be introduced here,
+                # I'll keep the original logic for status_str/tag/icon_name.
                 
                 status_str = "Loaded Module (In Use)"
                 status_tag = " (In Use)"
@@ -776,7 +788,30 @@ class MontecarloUI(Gtk.Window):
         real_driver = driver.split(' ')[0]
         
         # CHEQUEO DE SEGURIDAD (Double Check)
-        # Check if driver is IN USE
+        
+        # 1. DEPENDENCY CHECK (Holders)
+        # If module has holders -> BLOCK ACTION (It's a dependency of another active module)
+        has_holders = libmc.mc_module_has_holders(real_driver.encode('utf-8'))
+        
+        if has_holders:
+            self.log(f"BLOCKED: Module {real_driver} is held by others.", "red")
+            dialog = Gtk.MessageDialog(
+                transient_for=self,
+                flags=0,
+                message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.OK,
+                text=f"Cannot Unload {real_driver}"
+            )
+            dialog.format_secondary_text(
+                f"The module '{real_driver}' is currently being used by other kernel modules (Dependency).\n\n"
+                "You must unload the dependent modules first."
+            )
+            dialog.run()
+            dialog.destroy()
+            return
+
+        # 2. BUS/HARDWARE CHECK
+        # Check if driver is IN USE by actual hardware bindings
         ref = libmc.mc_get_module_refcount(real_driver.encode('utf-8'))
         in_use = libmc.mc_driver_is_in_use(real_driver.encode('utf-8'))
         

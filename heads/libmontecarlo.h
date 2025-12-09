@@ -27,6 +27,8 @@ int mc_list_all_usb_devices(mc_device_info_t *out, int max);
 int mc_try_load_driver(const char *driver);
 int mc_unload_driver(const char *driver);
 int mc_dmesg_has_activity(const char *driver);
+int mc_dmesg_has_activity(const char *driver);
+int mc_module_has_holders(const char *module);
 int mc_get_module_refcount(const char *module);
 int mc_list_loaded_modules(char *out_buf, int max_size);
 int mc_driver_is_in_use(const char *driver);
