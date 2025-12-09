@@ -1,6 +1,6 @@
-# Monte Carlo Driver Manager
+# Montecarlo Driver Manager
 
-Monte Carlo is an advanced, automated driver management tool for Linux. It abstracts the complexity of kernel modules, allowing users to probe, load, and manage USB drivers safely and efficiently.
+Montecarlo is an advanced, automated driver management tool for Linux. It abstracts the complexity of kernel modules, allowing users to probe, load, and manage USB drivers safely and efficiently.
 
 It is designed to detect devices without drivers and help users find the correct module, while actively preventing system instability through rigorous safety checks.
 
