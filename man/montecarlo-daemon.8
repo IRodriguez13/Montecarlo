@@ -1,0 +1,123 @@
+.TH MONTECARLO-DAEMON 8 " December 2025" "Montecarlo 0.3" "System Administration"
+.SH NAME
+montecarlo-daemon \- USB device detection and driver management daemon
+.SH SYNOPSIS
+.B montecarlo-daemon
+.SH DESCRIPTION
+.B montecarlo-daemon
+is a system service that monitors USB device connections via udev. When a device without a driver is detected, it can launch the Montecarlo UI to assist the user in finding the appropriate kernel module, or send desktop notifications.
+.PP
+The daemon runs as a systemd service and performs intelligent filtering to avoid false positives from mass storage devices and devices that already have drivers bound.
+.SH OPERATION
+The daemon performs the following workflow when a USB device is connected:
+.TP
+.B 1. Monitor
+Listens for udev events on the USB subsystem
+.TP
+.B 2. Detect
+Receives device 'add' events from the kernel
+.TP
+.B 3. Filter Mass Storage
+Checks if the device is USB Class 08 (Mass Storage). If so, ignores it as these devices typically auto-load drivers.
+.TP
+.B 4. Check Driver
+Verifies if the device already has a driver bound by checking sysfs
+.TP
+.B 5. Launch UI
+If no driver is present and the UI is not already running, forks and launches the Montecarlo graphical interface
+.TP
+.B 6. Communicate
+Sends device information to the UI via Unix domain socket for user interaction
+.SH FILTERING LOGIC
+The daemon implements intelligent filtering to reduce noise:
+.PP
+.B Excluded Devices:
+.RS
+.IP \(bu 2
+Mass storage devices (pendrives, external hard drives) - Class 08
+.IP \(bu 2
+Devices that already have a driver bound
+.IP \(bu 2
+USB hubs (detected by the UI, not the daemon)
+.RE
+.PP
+This filtering ensures that only devices genuinely needing user intervention trigger the UI.
+.SH FILES
+.TP
+.I /tmp/montecarlo.sock
+Unix domain socket for daemon-UI communication. The daemon binds to this socket and accepts connections from the UI to transmit device information.
+.TP
+.I /tmp/montecarlo_ui.pid
+PID file used to detect if the UI is already running, preventing duplicate launches.
+.SH SYSTEMD INTEGRATION
+The daemon is designed to run as a systemd service:
+.TP
+.B Start the service:
+systemctl start montecarlo
+.TP
+.B Enable at boot:
+systemctl enable montecarlo
+.TP
+.B Check status:
+systemctl status montecarlo
+.TP
+.B View real-time logs:
+journalctl -u montecarlo -f
+.TP
+.B Restart after configuration changes:
+systemctl restart montecarlo
+.SH ENVIRONMENT VARIABLES
+.TP
+.B MONTECARLO_DEV
+If set to "1", the daemon launches the UI from the current working directory (development mode) instead of /usr/share/montecarlo/.
+.TP
+.B SUDO_USER
+Used to determine the target user for launching the graphical UI when the daemon runs as root.
+.TP
+.B DISPLAY
+X11 display variable, set by the daemon for the UI process.
+.SH SIGNALS
+.TP
+.B SIGTERM, SIGINT
+Gracefully shut down the daemon, closing the socket and cleaning up resources.
+.SH SECURITY
+The daemon runs as root (required for udev monitoring and module loading). The UI it launches drops privileges to the actual user via environment variable detection.
+.PP
+Future versions will use PolicyKit for finer-grained privilege separation.
+.SH DIAGNOSTICS
+The daemon logs to systemd journal. To view diagnostic information:
+.PP
+.EX
+journalctl -u montecarlo -n 100
+.EE
+.PP
+Common log messages:
+.TP
+.B "[daemon] add: /sys/..."
+Device detected
+.TP
+.B "[daemon] Ignoring Mass Storage device"
+Mass storage filter triggered
+.TP
+.B "[daemon] Driver already present. Ignoring."
+Device has a driver, no action needed
+.TP
+.B "[daemon] No driver found. Triggering UI."
+Launching UI for driver discovery
+.SH SEE ALSO
+.BR montecarlo (1),
+.BR systemctl (1),
+.BR journalctl (1),
+.BR udevadm (8),
+.BR modprobe (8)
+.SH BUGS
+Report bugs to: https://github.com/IRodriguez13/Montecarlo/issues
+.SH AUTHOR
+Written by I. Rodriguez.
+.SH COPYRIGHT
+Copyright \(co 2025 I. Rodriguez.
+.br
+License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.
+.br
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.

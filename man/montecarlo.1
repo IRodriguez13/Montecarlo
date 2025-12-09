@@ -1,0 +1,88 @@
+.TH MONTECARLO 1 "December 2025" "Montecarlo 0.3" "User Commands"
+.SH NAME
+montecarlo \- USB driver management CLI utility
+.SH SYNOPSIS
+.B montecarlo
+.RI [ COMMAND ]
+.RI [ ARGUMENTS ]
+.SH DESCRIPTION
+.B montecarlo
+is a command-line interface for managing USB kernel drivers. It allows listing available modules, loading drivers, and running automated driver discovery for devices without drivers.
+.PP
+Montecarlo simplifies the process of finding and loading the correct kernel module for USB devices by providing an intelligent filtering system and safety checks.
+.SH COMMANDS
+.TP
+.B list
+List all available USB driver candidates in the system module repository. This scans /lib/modules and shows drivers that are not currently loaded.
+.TP
+.BR load " " \fIMODULE\fR
+Load a specific kernel module using modprobe. Requires root privileges.
+.TP
+.BR unload " " \fIMODULE\fR
+Unload a kernel module. Safety checks are performed automatically to prevent system instability:
+.RS
+.IP \(bu 2
+Verifies the module has no dependent modules (holders)
+.IP \(bu 2
+Checks if the module is controlling active hardware
+.IP \(bu 2
+Blocks unloading if it would cause system issues
+.RE
+.TP
+.BR run " " \fISYSPATH\fR
+Run Monte Carlo driver discovery algorithm for a specific device identified by its sysfs path. This attempts to load candidate drivers one by one until a match is found.
+.SH EXAMPLES
+.TP
+List all available USB modules:
+.EX
+montecarlo list
+.EE
+.TP
+Load a specific USB serial driver:
+.EX
+sudo montecarlo load usbserial
+.EE
+.TP
+Unload an idle driver:
+.EX
+sudo montecarlo unload ch341
+.EE
+.TP
+Run automatic driver discovery for a device:
+.EX
+sudo montecarlo run /sys/devices/pci0000:00/0000:00:14.0/usb1/1-1
+.EE
+.SH FILES
+.TP
+.I /var/cache/montecarlo/
+Cache directory for successful device-driver associations. Used to speed up future device connections.
+.TP
+.I /tmp/montecarlo.sock
+Unix domain socket for daemon-UI communication.
+.SH EXIT STATUS
+.TP
+.B 0
+Success
+.TP
+.B 1
+General error (invalid arguments, operation failed)
+.SH NOTES
+Most operations require root privileges as they interact with kernel modules.
+.PP
+The tool actively prevents unsafe operations through multiple safety checks, making it safer than direct modprobe usage.
+.SH SEE ALSO
+.BR montecarlo-daemon (8),
+.BR modprobe (8),
+.BR lsusb (8),
+.BR udevadm (8)
+.SH BUGS
+Report bugs to: https://github.com/IRodriguez13/Montecarlo/issues
+.SH AUTHOR
+Written by I. Rodriguez.
+.SH COPYRIGHT
+Copyright \(co 2025 I. Rodriguez.
+.br
+License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.
+.br
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.

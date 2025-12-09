@@ -10,12 +10,19 @@ from ctypes import CDLL, c_int, c_char_p, c_char, POINTER, create_string_buffer,
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib, Pango
+gi.require_version("Notify", "0.7")
+from gi.repository import Gtk, GLib, Pango, Notify
 import webbrowser
 import subprocess
 
 # --- CONFIG & LIBS ---
 SOCK_PATH = "/tmp/montecarlo.sock"
+
+# Helper path (dev vs production)
+if os.environ.get("MONTECARLO_DEV"):
+    HELPER_PATH = os.path.abspath("./montecarlo-helper")
+else:
+    HELPER_PATH = "/usr/bin/montecarlo-helper"
 
 if os.environ.get("MONTECARLO_DEV"):
     LIB_PATH = os.path.abspath("./libmontecarlo.so")
@@ -147,6 +154,9 @@ class MontecarloUI(Gtk.Window):
         # Initial Scan
         self.refresh_devices()
 
+        # Initialize Desktop Notifications
+        Notify.init("Montecarlo")
+
         # PID File for Daemon Singleton Check
         self.pid_file = "/tmp/montecarlo_ui.pid"
         try:
@@ -154,6 +164,34 @@ class MontecarloUI(Gtk.Window):
                 f.write(str(os.getpid()))
         except Exception as e:
             print(f"Failed to write PID file: {e}")
+
+    def show_device_notification(self, syspath):
+        """Show desktop notification when driverless device is detected."""
+        # Extract device name/ID if possible (simplified)
+        device_label = syspath.split('/')[-1] if syspath else "Unknown"
+        
+        notification = Notify.Notification.new(
+            "USB Device Detected",
+            f"Device without driver detected: {device_label}\nClick to find a driver",
+            "drive-harddisk-usb"
+        )
+        
+        # Add action to bring UI to front
+        notification.add_action(
+            "open",
+            "Find Driver",
+            self.on_notification_action,
+            None
+        )
+        
+        notification.set_urgency(Notify.Urgency.NORMAL)
+        notification.show()
+    
+    def on_notification_action(self, notification, action, data):
+        """Handle notification action: bring UI to front and switch to Available Modules."""
+        self.present()  # Bring window to front
+        self.notebook.set_current_page(1)  # Switch to Available Modules tab
+        self.log("[Notification] User requested driver search from notification.", "bold")
 
     def socket_listener(self):
         # ... (same as before) ...
@@ -386,18 +424,47 @@ class MontecarloUI(Gtk.Window):
         module = model[treeiter][0]
         self.log(f"Loading {module} from repository...", "bold")
         
-        ret = libmc.mc_try_load_driver(module.encode('utf-8'))
-        if ret:
-            self.log(f"  -> Module {module} loaded.", "green")
-            # Remove from repo list (it's now loaded)
-            # Must convert Filter iter to Child Store iter
-            child_iter = self.repo_filter.convert_iter_to_child_iter(treeiter)
-            self.repo_store.remove(child_iter)
+        # Use PolicyKit for privileged operation
+        try:
+            result = subprocess.run(
+                ["pkexec", HELPER_PATH, "load", module],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
             
-            time.sleep(1.0)
-            self.refresh_devices()
-        else:
-            self.log(f"  -> Failed to load {module}.", "red")
+            if result.returncode == 0:
+                self.log(f"  -> Module {module} loaded.", "green")
+                # Remove from repo list (it's now loaded)
+                # Must convert Filter iter to Child Store iter
+                child_iter = self.repo_filter.convert_iter_to_child_iter(treeiter)
+                self.repo_store.remove(child_iter)
+                
+                time.sleep(1.0)
+                self.refresh_devices()
+            else:
+                error_msg = result.stderr.strip() if result.stderr else "Unknown error"
+                self.log(f"  -> Failed to load {module}: {error_msg}", "red")
+                
+        except subprocess.TimeoutExpired:
+            self.log(f"  -> Timeout waiting for authentication.", "red")
+        except FileNotFoundError:
+            self.log(f"  -> PolicyKit not available. Install policykit-1.", "red")
+            dialog = Gtk.MessageDialog(
+                transient_for=self,
+                flags=0,
+                message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.OK,
+                text="PolicyKit Required"
+            )
+            dialog.format_secondary_text(
+                "Montecarlo requires PolicyKit for privilege elevation.\n\n"
+                "Please install: sudo apt install policykit-1"
+            )
+            dialog.run()
+            dialog.destroy()
+        except Exception as e:
+            self.log(f"  -> Error: {e}", "red")
 
     def get_loaded_modules_set(self):
         buf = create_string_buffer(4096 * 10) # 40kb buffer
@@ -926,20 +993,39 @@ class MontecarloUI(Gtk.Window):
             return
 
         self.log(f"Unloading driver {real_driver}...", "bold")
-        ret = libmc.mc_unload_driver(real_driver.encode('utf-8'))
         
-        if ret == 0:
-            self.log(f"FAILED. Could not unload {real_driver} (Built-in or locked).", "red")
-            dialog = Gtk.MessageDialog(
-                transient_for=self,
-                flags=0,
-                message_type=Gtk.MessageType.ERROR,
-                buttons=Gtk.ButtonsType.OK,
-                text="Unload Failed"
+        # Use PolicyKit for privileged operation
+        try:
+            result = subprocess.run(
+                ["pkexec", HELPER_PATH, "unload", real_driver],
+                capture_output=True,
+                text=True,
+                timeout=30
             )
-            dialog.format_secondary_text(f"The system refused to unload '{real_driver}'.\nIt is likely built-in or locked by the kernel.")
-            dialog.run()
-            dialog.destroy()
+            
+            if result.returncode != 0:
+                error_msg = result.stderr.strip() if result.stderr else "Unknown error"
+                self.log(f"FAILED. Could not unload {real_driver}: {error_msg}", "red")
+                dialog = Gtk.MessageDialog(
+                    transient_for=self,
+                    flags=0,
+                    message_type=Gtk.MessageType.ERROR,
+                    buttons=Gtk.ButtonsType.OK,
+                    text="Unload Failed"
+                )
+                dialog.format_secondary_text(f"The system refused to unload '{real_driver}'.\n{error_msg}")
+                dialog.run()
+                dialog.destroy()
+                return
+                
+        except subprocess.TimeoutExpired:
+            self.log(f"Timeout waiting for authentication.", "red")
+            return
+        except FileNotFoundError:
+            self.log(f"PolicyKit not available. Install policykit-1.", "red")
+            return
+        except Exception as e:
+            self.log(f"Error: {e}", "red")
             return
         
         # Add to history if not present
@@ -1111,8 +1197,12 @@ class MontecarloUI(Gtk.Window):
                         if msg.get("event") == "add" and "syspath" in msg:
                             sp = msg["syspath"]
                             self.log(f"[DAEMON EVENT] Device Added: {sp}", "bold")
+                            
+                            # Show desktop notification
+                            GLib.idle_add(self.show_device_notification, sp)
+                            
+                            # Refresh device list
                             GLib.idle_add(self.refresh_devices)
-                            # Could auto-select or auto-run here
                     except Exception as e:
                         print(e)
                 sock.close()
