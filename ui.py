@@ -7,23 +7,40 @@ import json
 import threading
 import ctypes
 from ctypes import CDLL, c_int, c_char_p, c_char, POINTER, create_string_buffer, Structure
+import subprocess
+import webbrowser
 
 import gi
 gi.require_version("Gtk", "3.0")
-gi.require_version("Notify", "0.7")
+gi.require_version('Notify', '0.7')
 from gi.repository import Gtk, GLib, Pango, Notify
-import webbrowser
-import subprocess
 
 # --- CONFIG & LIBS ---
-SOCK_PATH = "/tmp/montecarlo.sock"
 
-# Helper path (dev vs production)
-if os.environ.get("MONTECARLO_DEV"):
-    HELPER_PATH = os.path.abspath("./montecarlo-helper")
-else:
-    HELPER_PATH = "/usr/bin/montecarlo-helper"
+# Version
+MONTECARLO_VERSION = "0.4.0"
 
+# Socket Path (same logic as daemon)
+def get_socket_path():
+    """Get secure socket path for current user"""
+    runtime_dir = os.getenv("XDG_RUNTIME_DIR")
+    uid = os.getuid()
+    
+    if runtime_dir:
+        return os.path.join(runtime_dir, "montecarlo.sock")
+    
+    # Check if /run/user/$UID exists
+    runtime_path = f"/run/user/{uid}"
+    if os.access(runtime_path, os.W_OK):
+        return os.path.join(runtime_path, "montecarlo.sock")
+    
+    # Fallback to /tmp with UID
+    return f"/tmp/montecarlo-{uid}.sock"
+
+SOCK_PATH = get_socket_path()
+HELPER_PATH = os.environ.get("MONTECARLO_DEV") and "./montecarlo-helper" or "/usr/bin/montecarlo-helper"
+
+# Lib Path (dev vs production)
 if os.environ.get("MONTECARLO_DEV"):
     LIB_PATH = os.path.abspath("./libmontecarlo.so")
 else:
@@ -686,7 +703,7 @@ class MontecarloUI(Gtk.Window):
         
         # Logo/Title
         title = Gtk.Label()
-        title.set_markup("<span size='xx-large' weight='bold'>Montecarlo 0.3</span>")
+        title.set_markup(f"<span size='xx-large' weight='bold'>Montecarlo {MONTECARLO_VERSION}</span>")
         vbox.pack_start(title, False, False, 0)
         
         # Subtitle
@@ -696,9 +713,9 @@ class MontecarloUI(Gtk.Window):
         
         # Description
         desc_txt = (
-            "Montecarlo allows you to probe, load, and unload USB kernel modules safely.\n"
+            "Montecarlo allows you to probe, load, and unload kernel modules safely.\n"
             "It checks for active use before unloading to protect your system.\n\n"
-            "Dev Build: 0.3 (Beta - PolicyKit Integration)"
+            f"Version: {MONTECARLO_VERSION}"
         )
         desc = Gtk.Label(label=desc_txt)
         desc.set_justify(Gtk.Justification.CENTER)

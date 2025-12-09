@@ -11,11 +11,40 @@
 #include <errno.h>
 
 #include "heads/libmontecarlo.h"
-
-#define SOCKET_PATH "/tmp/montecarlo.sock"
+#include "heads/version.h"
 
 static int server_fd = -1;
 static char current_syspath[1024] = {0};
+static char socket_path[256] = {0};
+
+/* Get secure socket path for current user */
+void get_socket_path(char *buf, size_t bufsize)
+{
+    const char *runtime_dir = getenv("XDG_RUNTIME_DIR");
+    uid_t uid = getuid();
+    
+    /* Prefer XDG_RUNTIME_DIR, fallback to /run/user/$UID, then /tmp */
+    if (runtime_dir && runtime_dir[0] != '\0')
+    {
+        snprintf(buf, bufsize, "%s/montecarlo.sock", runtime_dir);
+    }
+    else
+    {
+        /* Check if /run/user/$UID exists */
+        char runtime_path[256];
+        snprintf(runtime_path, sizeof(runtime_path), "/run/user/%d", uid);
+        
+        if (access(runtime_path, W_OK) == 0)
+        {
+            snprintf(buf, bufsize, "%s/montecarlo.sock", runtime_path);
+        }
+        else
+        {
+            /* Fallback to /tmp with UID for uniqueness */
+            snprintf(buf, bufsize, "/tmp/montecarlo-%d.sock", uid);
+        }
+    }
+}
 
 /* Cleanup resources on exit */
 void cleanup(int signum)
@@ -25,7 +54,10 @@ void cleanup(int signum)
     {
         close(server_fd);
     }
-    unlink(SOCKET_PATH);
+    if (socket_path[0] != '\0')
+    {
+        unlink(socket_path);
+    }
     exit(0);
 }
 
@@ -33,6 +65,9 @@ void cleanup(int signum)
 int init_socket()
 {
     struct sockaddr_un addr;
+    
+    /* Get secure socket path */
+    get_socket_path(socket_path, sizeof(socket_path));
 
     if ((server_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
     {
@@ -42,9 +77,9 @@ int init_socket()
 
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, SOCKET_PATH, sizeof(addr.sun_path) - 1);
+    strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
 
-    unlink(SOCKET_PATH);
+    unlink(socket_path);
 
     if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) == -1)
     {
@@ -58,8 +93,8 @@ int init_socket()
         return -1;
     }
     
-    /* Allow connections from any user (demo purpose) or restrict as needed */
-    chmod(SOCKET_PATH, 0666);
+    /* Restrict to user only (0600) for security */
+    chmod(socket_path, 0600);
 
     return 0;
 }
@@ -94,9 +129,27 @@ void handle_client()
     close(client_fd);
 }
 
-int main()
+int main(int argc, char *argv[])
 {
-    printf("[daemon] Starting Montecarlo Daemon...\n");
+    /* Handle command-line arguments */
+    if (argc > 1)
+    {
+        if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0)
+        {
+            printf("Montecarlo Daemon v%s\n", MONTECARLO_VERSION);
+            return 0;
+        }
+        else if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)
+        {
+            printf("Usage: %s [OPTIONS]\n", argv[0]);
+            printf("Options:\n");
+            printf("  --version, -v    Show version information\n");
+            printf("  --help, -h       Show this help message\n");
+            return 0;
+        }
+    }
+    
+    printf("[daemon] Starting Montecarlo Daemon v%s...\n", MONTECARLO_VERSION);
 
     signal(SIGINT, cleanup);
     signal(SIGTERM, cleanup);
@@ -130,7 +183,7 @@ int main()
 
     int udev_fd = udev_monitor_get_fd(mon);
 
-    printf("[daemon] Listening on %s and UDev...\n", SOCKET_PATH);
+    printf("[daemon] Listening on %s and UDev...\n", socket_path);
 
     for (;;) 
     {
