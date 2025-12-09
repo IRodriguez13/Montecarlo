@@ -122,6 +122,10 @@ int main()
     }
 
     udev_monitor_filter_add_match_subsystem_devtype(mon, "usb", NULL);
+    udev_monitor_filter_add_match_subsystem_devtype(mon, "pci", NULL);
+    udev_monitor_filter_add_match_subsystem_devtype(mon, "hid", NULL);
+    udev_monitor_filter_add_match_subsystem_devtype(mon, "scsi", NULL);
+    udev_monitor_filter_add_match_subsystem_devtype(mon, "i2c", NULL);
     udev_monitor_enable_receiving(mon);
 
     int udev_fd = udev_monitor_get_fd(mon);

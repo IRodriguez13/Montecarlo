@@ -1,6 +1,5 @@
 #pragma once
 
-void mc_run(const char *syspath);
 int dmesg_has_activity(const char *driver);
 int try_load_driver(const char *driver);
 void launch_ui(const char *vendor, const char *product);

@@ -16,9 +16,11 @@ typedef struct {
     char vidpid[32];
     char product[128];
     char driver[64];
+    char subsystem[16];
 } mc_device_info_t;
 
-int mc_list_all_usb_devices(mc_device_info_t *out, int max);
+int mc_list_all_devices(mc_device_info_t *out, int max);
+const char* mc_get_device_subsystem(const char *syspath);
 int mc_try_load_driver(const char *driver);
 int mc_unload_driver(const char *driver);
 int mc_dmesg_has_activity(const char *driver);
@@ -31,6 +33,8 @@ int mc_driver_is_in_use(const char *driver);
 /*High level checks*/
 int mc_dev_has_driver(const char *syspath);
 int mc_is_excluded_device(const char *syspath);
+int mc_is_infrastructure_device(const char *syspath, const char *subsystem);
+
 
 
 #ifdef __cplusplus

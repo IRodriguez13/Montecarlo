@@ -42,7 +42,8 @@ class MCDeviceInfo(Structure):
         ("syspath", c_char * 256),
         ("vidpid", c_char * 32),
         ("product", c_char * 128),
-        ("driver", c_char * 64)
+        ("driver", c_char * 64),
+        ("subsystem", c_char * 16)
     ]
 
 # Signatures
@@ -74,8 +75,11 @@ libmc.mc_driver_is_in_use.restype = ctypes.c_int
 libmc.mc_list_candidate_drivers.argtypes = [POINTER(c_char), c_int]
 libmc.mc_list_candidate_drivers.restype = c_int
 
-libmc.mc_list_all_usb_devices.argtypes = [POINTER(MCDeviceInfo), c_int]
-libmc.mc_list_all_usb_devices.restype = c_int
+libmc.mc_list_all_devices.argtypes = [POINTER(MCDeviceInfo), c_int]
+libmc.mc_list_all_devices.restype = c_int
+
+libmc.mc_get_device_subsystem.argtypes = [c_char_p]
+libmc.mc_get_device_subsystem.restype = c_char_p
 
 # --- UI CLASS ---
 
@@ -243,21 +247,45 @@ class MontecarloUI(Gtk.Window):
         
         self.repo_box.pack_start(header, False, False, 0)
         
-        desc = Gtk.Label(label="Kernel drivers in /lib/modules. Load them for testing.", xalign=0)
+        desc = Gtk.Label(label="Available kernel modules for your system.", xalign=0)
         self.repo_box.pack_start(desc, False, False, 0)
+        
+        # Filter Controls Box
+        filter_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         
         # Search Filter
         self.repo_search = Gtk.SearchEntry()
         self.repo_search.set_placeholder_text("Filter modules by name...")
         self.repo_search.connect("search-changed", self.on_repo_search_changed)
-        self.repo_box.pack_start(self.repo_search, False, False, 0)
+        filter_box.pack_start(self.repo_search, True, True, 0)
+        
+        # Bus Type Filter Dropdown
+        bus_label = Gtk.Label(label="Bus Type:")
+        filter_box.pack_start(bus_label, False, False, 0)
+        
+        self.bus_filter_combo = Gtk.ComboBoxText()
+        self.bus_filter_combo.append("all", "All Buses")
+        self.bus_filter_combo.append("usb", "USB")
+        self.bus_filter_combo.append("pci", "PCI")
+        self.bus_filter_combo.append("hid", "HID")
+        self.bus_filter_combo.append("i2c", "I²C")
+        self.bus_filter_combo.append("sdio", "SDIO")
+        self.bus_filter_combo.append("scsi", "SCSI")
+        self.bus_filter_combo.set_active_id("all")
+        self.bus_filter_combo.connect("changed", self.on_bus_filter_changed)
+        filter_box.pack_start(self.bus_filter_combo, False, False, 0)
+        
+        self.repo_box.pack_start(filter_box, False, False, 0)
         
         # Paned layout (List + Details)
         paned = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
         self.repo_box.pack_start(paned, True, True, 0)
         
-        # List: Name, Path
-        self.repo_store = Gtk.ListStore(str, str) # Name, FullPath
+        # List: Name, Path, Bus (hidden for filtering)
+        self.repo_store = Gtk.ListStore(str, str, str) # Name, FullPath, Bus
+        
+        # Make the underlying store sortable (FIX for GTK warning)
+        self.repo_store.set_sort_column_id(0, Gtk.SortType.ASCENDING)
         
         # Filterable Model
         self.repo_filter = self.repo_store.filter_new(None)
@@ -266,7 +294,7 @@ class MontecarloUI(Gtk.Window):
         self.repo_tree = Gtk.TreeView(model=self.repo_filter)
         
         col_name = Gtk.TreeViewColumn("Module Name", Gtk.CellRendererText(), text=0)
-        col_name.set_sort_column_id(0)
+        col_name.set_sort_column_id(0)  # This now works because store is sortable
         self.repo_tree.append_column(col_name)
         
         col_path = Gtk.TreeViewColumn("Path", Gtk.CellRendererText(), text=1)
@@ -325,15 +353,29 @@ class MontecarloUI(Gtk.Window):
 
         
     def repo_filter_func(self, model, iter, data):
+        # Text search filter
         query = self.repo_search.get_text().lower()
-        if not query: return True
-        
         name = model[iter][0].lower()
-        if query in name: return True
-        return False
+        
+        if query and query not in name:
+            return False
+        
+        # Bus type filter
+        bus_filter = self.bus_filter_combo.get_active_id()
+        if bus_filter and bus_filter != "all":
+            module_bus = model[iter][2].lower()  # Bus is in column 2
+            if bus_filter not in module_bus:
+                return False
+        
+        return True
 
     def on_repo_search_changed(self, widget):
         self.repo_filter.refilter()
+    
+    def on_bus_filter_changed(self, widget):
+        self.repo_filter.refilter()
+        bus_name = widget.get_active_text()
+        self.log(f"[Filter] Showing {bus_name} modules only", "bold")
         
     def refresh_repository(self, widget=None):
         if widget: self.repo_spinner.start()
@@ -350,20 +392,33 @@ class MontecarloUI(Gtk.Window):
             loaded = set()
         
         kernel_ver = os.uname().release
-        base_path = f"/lib/modules/{kernel_ver}/kernel/drivers/usb"
+        base_path = f"/lib/modules/{kernel_ver}/kernel/drivers"
+        
+        # Bus directories to scan
+        bus_dirs = {
+            "usb": "usb",
+            "pci": "pci",
+            "hid": "hid",
+            "i2c": "i2c",
+            "scsi": "scsi",
+            "mmc": "sdio",  # SDIO is under mmc directory
+            "net": "net"    # Network drivers (often PCI)
+        }
         
         new_rows = []
         
-        if os.path.exists(base_path):
-            count = 0
-            for root, dirs, files in os.walk(base_path):
+        for bus_subdir, bus_type in bus_dirs.items():
+            bus_path = f"{base_path}/{bus_subdir}"
+            if not os.path.exists(bus_path):
+                continue
+                
+            for root, dirs, files in os.walk(bus_path):
                 for f in files:
                     if f.endswith(".ko") or f.endswith(".ko.xz") or f.endswith(".ko.zst"):
                         name = f.split('.')[0].replace('-', '_')
                         if name not in loaded:
-                             full_path = os.path.join(root, f)
-                             new_rows.append([name, full_path])
-                             count += 1
+                            full_path = os.path.join(root, f)
+                            new_rows.append([name, full_path, bus_type])
         
         GLib.idle_add(self._update_repo_ui, new_rows)
 
@@ -826,7 +881,7 @@ class MontecarloUI(Gtk.Window):
         # 1. Physical Devices
         max_devs = 64
         devs_buf = (MCDeviceInfo * max_devs)()
-        count = libmc.mc_list_all_usb_devices(devs_buf, max_devs)
+        count = libmc.mc_list_all_devices(devs_buf, max_devs)
         
         # 2. Loaded Modules
         try:
@@ -876,71 +931,62 @@ class MontecarloUI(Gtk.Window):
                 icon
             ])
             
-        # 3. Add Unused Loaded Modules (that are likely USB drivers)
-        if not hasattr(self, 'known_usb_modules') or not self.known_usb_modules:
-            kset = set()
-            try:
-                kernel_ver = os.uname().release
-                base_path = f"/lib/modules/{kernel_ver}/kernel/drivers/usb"
-                if os.path.exists(base_path):
-                     for root, dirs, files in os.walk(base_path):
-                        for f in files:
-                            if f.endswith(".ko") or f.endswith(".ko.xz") or f.endswith(".ko.zst"):
-                                 name = f.split('.')[0].replace('-', '_')
-                                 kset.add(name)
-                self.known_usb_modules = kset
-            except: 
-                self.known_usb_modules = set()
-            
-        # Filter Unused
+        # 3. Add Loaded Modules that DON'T have hardware present (Idle modules)
+        # Show ALL loaded modules (not just USB) that:
+        #   - Are NOT in use by hardware (not in used_drivers)
+        #   - Are NOT dependencies (no holders)
+        #   - Are NOT infrastructure (hubs, host controllers, bridges, etc.)
+        
+        # Infrastructure/dependency modules to always exclude
+        excluded_modules = {
+            # USB infrastructure
+            "usbcore", "usb_common", "usb_storage",
+            "hub", "xhci_hcd", "ehci_hcd", "uhci_hcd", "ohci_hcd", 
+            "xhci_pci", "ehci_pci", "ohci_pci",
+            # PCI infrastructure  
+            "pcieport", "pci_bridge", "shpchp",
+            # SCSI infrastructure
+            "scsi_mod", "sd_mod", "sr_mod",
+            # General kernel modules
+            "kernel", "bluetooth", "rfkill",
+        }
+        
+        # Filter Unused Loaded Modules
         for mod in loaded_set:
-            # We check if it is a known USB module OR if it starts with 'usb'
-            is_usb = (mod in self.known_usb_modules) or mod.startswith("usb") or mod.startswith("cdc_")
+            # Skip if already shown as in-use
+            if mod in used_drivers:
+                continue
             
-            if is_usb and mod not in used_drivers:
-                # Exclude internal stuff if possible
-                if mod in ["usbcore", "usb_common", "usb_storage"]: 
-                    pass
-                
-                # Check exclusion list (hubs/controllers)
-                if mod in ["hub", "xhci_hcd", "ehci_hcd", "uhci_hcd", "ohci_hcd", "xhci_pci", "usbhid"]:
-                    pass
-                
-                # Check actual usage
-                # UX RULE: Dependency Filtering
-                # If module has holders -> It is a dependency -> DO NOT SHOW in Dashboard.
-                # Only show "root" modules (holders is empty).
-                has_holders = libmc.mc_module_has_holders(mod.encode('utf-8'))
-                if has_holders:
-                     continue
-                
-                in_use = libmc.mc_driver_is_in_use(mod.encode('utf-8'))
-                
-                # Additional check: If not in use, but refcount > 0, strict kernel logic says it's in use.
-                # But the 'holders' check usually covers the dependency part.
-                # We trust 'holders' for the UX filtering.
-                
-                # The original code had `status_str` and `status_tag` defined here.
-                # Assuming `explicit_drivers` is not meant to be introduced here,
-                # I'll keep the original logic for status_str/tag/icon_name.
-                
+            # Skip infrastructure/common modules
+            if mod in excluded_modules:
+                continue
+            
+            # Skip if has holders (it's a dependency)
+            has_holders = libmc.mc_module_has_holders(mod.encode('utf-8'))
+            if has_holders:
+                continue
+            
+            # Check if actually in use via bus binding
+            in_use = libmc.mc_driver_is_in_use(mod.encode('utf-8'))
+            
+            # Determine status
+            if in_use:
                 status_str = "Loaded Module (In Use)"
                 status_tag = " (In Use)"
-                icon_name = "package-x-generic" # Active module generic
-                
-                if not in_use:
-                    status_str = "Loaded Module (Idle)"
-                    status_tag = " (Idle)"
-                    icon_name = "application-x-addon" # Distinct icon for IDLE
-                
-                # Show it
-                ui_list.append([
-                    f"module:{mod}",
-                    "System",
-                    status_str,
-                    mod + status_tag,
-                    icon_name
-                ])
+                icon_name = "package-x-generic"
+            else:
+                status_str = "Loaded Module (Idle)"
+                status_tag = " (Idle)"
+                icon_name = "application-x-addon"
+            
+            # Show it in dashboard
+            ui_list.append([
+                f"module:{mod}",      # syspath (or module ID)
+                "Module",              # vidpid (show as "Module" to distinguish)
+                status_str,            # product (display name)
+                mod + status_tag,      #driver (module name with status)
+                icon_name              # icon
+            ])
 
         GLib.idle_add(self.update_dev_list, ui_list)
 

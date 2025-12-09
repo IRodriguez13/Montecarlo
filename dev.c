@@ -13,7 +13,7 @@ bool dev_has_driver(struct udev_device *dev)
     struct udev_device *parent = dev;
     const char *sub;
 
-    // Escalar hasta encontrar el device real USB
+    
     while ((sub = udev_device_get_subsystem(parent)) &&
            strcmp(sub, "usb") != 0)
     {

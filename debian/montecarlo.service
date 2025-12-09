@@ -1,5 +1,5 @@
 [Unit]
-Description=Monte Carlo Driver Manager
+Description=Montecarlo Driver Manager Daemon
 After=network.target
 
 [Service]

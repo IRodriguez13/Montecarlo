@@ -57,46 +57,56 @@ void mc_get_ids(const char *syspath, char *vendor, char *product)
 /*   /sys/bus/usb/drivers */
 /*   /sys/bus/usb-serial/drivers */
 /*   /sys/bus/hid/drivers */
+/*   /sys/bus/pci/drivers */
+/*   /sys/bus/i2c/drivers */
+/*   /sys/bus/sdio/drivers */
+/*   /sys/bus/scsi/drivers */
 int mc_list_candidate_drivers(char out[][128], int max)
 {
-    const char *paths[] = {
+    const char *bus_paths[] = {
         "/sys/bus/usb/drivers",
         "/sys/bus/usb-serial/drivers",
-        "/sys/bus/hid/drivers"};
+        "/sys/bus/hid/drivers",
+        "/sys/bus/pci/drivers",
+        "/sys/bus/i2c/drivers",
+        "/sys/bus/sdio/drivers",
+        "/sys/bus/scsi/drivers",
+        NULL
+    };
 
     int count = 0;
 
-    for (int i = 0; i < 3; i++)
+    for (int b = 0; bus_paths[b] != NULL; b++)
     {
-        DIR *d = opendir(paths[i]);
-        if (!d)
-        {
+        DIR *dir = opendir(bus_paths[b]);
+        if (!dir)
             continue;
-        }
 
         struct dirent *ent;
-        while ((ent = readdir(d)))
+        while ((ent = readdir(dir)) != NULL)
         {
             if (ent->d_name[0] == '.')
-            {
                 continue;
-            }
 
-            /* Filter out non-driver directories (e.g., 'module') */
-            if (strcmp(ent->d_name, "module") == 0)
-            {
-                continue;
-            }
+            // Check if it's a directory or symlink
+            char full_path[512];
+            snprintf(full_path, sizeof(full_path), "%s/%s", bus_paths[b], ent->d_name);
 
-            if (count < max)
+            struct stat st;
+            if (lstat(full_path, &st) == 0 && S_ISDIR(st.st_mode))
             {
-                snprintf(out[count], 128, "%.127s", ent->d_name);
+                strncpy(out[count], ent->d_name, 127);
                 out[count][127] = '\0';
                 count++;
+
+                if (count >= max)
+                {
+                    closedir(dir);
+                    return count;
+                }
             }
         }
-
-        closedir(d);
+        closedir(dir);
     }
 
     return count;
@@ -151,6 +161,37 @@ int mc_dmesg_has_activity(const char *driver)
     return found;
 }
 
+/* GET DEVICE SUBSYSTEM */
+const char* mc_get_device_subsystem(const char *syspath)
+{
+    static char subsystem[16];
+    char link_path[1024];
+    char target[1024];
+    
+    snprintf(link_path, sizeof(link_path), "%s/subsystem", syspath);
+    
+    ssize_t len = readlink(link_path, target, sizeof(target) - 1);
+    if (len == -1)
+    {
+        strcpy(subsystem, "unknown");
+        return subsystem;
+    }
+    
+    target[len] = '\0';
+    const char *bus_name = strrchr(target, '/');
+    if (bus_name)
+    {
+        strncpy(subsystem, bus_name + 1, 15);
+        subsystem[15] = '\0';
+    }
+    else
+    {
+        strcpy(subsystem, "unknown");
+    }
+    
+    return subsystem;
+}
+
 /* CHECK IF DEVICE HAS DRIVER BOUND */
 int mc_dev_has_driver(const char *syspath)
 {
@@ -186,8 +227,8 @@ int mc_dev_has_driver(const char *syspath)
     return has_driver;
 }
 
-/* LIST ALL USB DEVICES */
-int mc_list_all_usb_devices(mc_device_info_t *out, int max)
+/* LIST ALL DEVICES (Multi-Bus Support) */
+int mc_list_all_devices(mc_device_info_t *out, int max)
 {
     struct udev *udev = udev_new();
     if (!udev)
@@ -196,7 +237,13 @@ int mc_list_all_usb_devices(mc_device_info_t *out, int max)
     }
 
     struct udev_enumerate *enumerate = udev_enumerate_new(udev);
+    
+    // Add multiple subsystems to enumerate
     udev_enumerate_add_match_subsystem(enumerate, "usb");
+    udev_enumerate_add_match_subsystem(enumerate, "pci");
+    udev_enumerate_add_match_subsystem(enumerate, "hid");
+    udev_enumerate_add_match_subsystem(enumerate, "scsi");
+    
     udev_enumerate_scan_devices(enumerate);
 
     struct udev_list_entry *devices, *dev_list_entry;
@@ -218,80 +265,166 @@ int mc_list_all_usb_devices(mc_device_info_t *out, int max)
             continue;
         }
 
-        // Verify it's an interface (where drivers bind)
-        const char *devtype = udev_device_get_devtype(dev);
-        if (!devtype || strcmp(devtype, "usb_interface") != 0)
+        // Get subsystem
+        const char *subsystem = udev_device_get_subsystem(dev);
+        if (!subsystem)
         {
             udev_device_unref(dev);
             continue;
         }
 
-        // FILTERING: Skip Hubs (Class 09)
-        const char *class_str = udev_device_get_sysattr_value(dev, "bInterfaceClass");
-        if (class_str && strcmp(class_str, "09") == 0)
+        // FILTERING: Skip infrastructure devices (bridges, ports, hosts)
+        if (mc_is_infrastructure_device(path, subsystem))
         {
             udev_device_unref(dev);
             continue;
         }
 
-        // Get Parent for Metadata
-        // NOTE: udev_device_get_parent_* returns a POINTER to the parent device which is linked to the child.
-        // It does NOT increment the refcount. The parent is valid as long as 'dev' is valid.
-        // We do NOT need to unref 'parent' explicitly.
-        struct udev_device *parent = udev_device_get_parent_with_subsystem_devtype(dev, "usb", "usb_device");
-        if (!parent)
+        // Handle USB devices (keep existing logic for USB interfaces)
+        if (strcmp(subsystem, "usb") == 0)
         {
-            udev_device_unref(dev);
-            continue; // Can't find parent info, skip
-        }
-
-        // Filter Root Hubs via Parent Class
-        const char *p_class = udev_device_get_sysattr_value(parent, "bDeviceClass");
-        if (p_class && strcmp(p_class, "09") == 0)
-        {
-             udev_device_unref(dev);
-             continue;
-        }
-
-        // Fill struct using Parent Info
-        strncpy(out[count].syspath, path, 255);
-        
-        const char *vendor = udev_device_get_sysattr_value(parent, "idVendor");
-        const char *product = udev_device_get_sysattr_value(parent, "idProduct");
-        const char *prod_name = udev_device_get_sysattr_value(parent, "product");
-        const char *man_name = udev_device_get_sysattr_value(parent, "manufacturer");
-
-        snprintf(out[count].vidpid, 31, "%s:%s", vendor ? vendor : "????", product ? product : "????");
-        
-        // Append Interface Number to Product Name to distinguish
-        const char *iface_num = udev_device_get_sysattr_value(dev, "bInterfaceNumber");
-        char combined_name[128];
-        if (prod_name)
-        {
-            if (man_name)
+            // Verify it's an interface (where drivers bind)
+            const char *devtype = udev_device_get_devtype(dev);
+            if (!devtype || strcmp(devtype, "usb_interface") != 0)
             {
-                 snprintf(combined_name, 127, "%s %s", man_name, prod_name);
+                udev_device_unref(dev);
+                continue;
+            }
+
+            // FILTERING: Skip Hubs (Class 09)
+            const char *class_str = udev_device_get_sysattr_value(dev, "bInterfaceClass");
+            if (class_str && strcmp(class_str, "09") == 0)
+            {
+                udev_device_unref(dev);
+                continue;
+            }
+
+            // Get Parent for Metadata
+            struct udev_device *parent = udev_device_get_parent_with_subsystem_devtype(dev, "usb", "usb_device");
+            if (!parent)
+            {
+                udev_device_unref(dev);
+                continue;
+            }
+
+            // Filter Root Hubs via Parent Class
+            const char *p_class = udev_device_get_sysattr_value(parent, "bDeviceClass");
+            if (p_class && strcmp(p_class, "09") == 0)
+            {
+                 udev_device_unref(dev);
+                 continue;
+            }
+
+            // Fill struct using Parent Info
+            strncpy(out[count].syspath, path, 255);
+            
+            const char *vendor = udev_device_get_sysattr_value(parent, "idVendor");
+            const char *product = udev_device_get_sysattr_value(parent, "idProduct");
+            const char *prod_name = udev_device_get_sysattr_value(parent, "product");
+            const char *man_name = udev_device_get_sysattr_value(parent, "manufacturer");
+
+            snprintf(out[count].vidpid, 31, "%s:%s", vendor ? vendor : "????", product ? product : "????");
+            
+            // Append Interface Number to Product Name
+            const char *iface_num = udev_device_get_sysattr_value(dev, "bInterfaceNumber");
+            char combined_name[128];
+            if (prod_name)
+            {
+                if (man_name)
+                {
+                     snprintf(combined_name, 127, "%s %s", man_name, prod_name);
+                }
+                else
+                {
+                     strncpy(combined_name, prod_name, 127);
+                }
             }
             else
             {
-                 strncpy(combined_name, prod_name, 127);
+                 strncpy(combined_name, "Unknown Device", 127);
+            }
+            
+            if (iface_num)
+            {
+                snprintf(out[count].product, 127, "%.110s (If: %s)", combined_name, iface_num);
+            }
+            else
+            {
+                strncpy(out[count].product, combined_name, 127);
+            }
+        }
+        // Handle PCI devices
+        else if (strcmp(subsystem, "pci") == 0)
+        {
+            strncpy(out[count].syspath, path, 255);
+            
+            // Get PCI vendor/device IDs
+            const char *vendor = udev_device_get_sysattr_value(dev, "vendor");
+            const char *device_id = udev_device_get_sysattr_value(dev, "device");
+            
+            if (vendor && device_id)
+            {
+                snprintf(out[count].vidpid, 31, "%s:%s", vendor, device_id);
+            }
+            else
+            {
+                strcpy(out[count].vidpid, "????:????");
+            }
+            
+            // Try to get a descriptive name
+            const char *label = udev_device_get_sysattr_value(dev, "label");
+            if (label)
+            {
+                strncpy(out[count].product, label, 127);
+            }
+            else
+            {
+                // Use sysname as fallback
+                const char *sysname = udev_device_get_sysname(dev);
+                snprintf(out[count].product, 127, "PCI Device %s", sysname ? sysname : "Unknown");
+            }
+        }
+        // Handle HID devices
+        else if (strcmp(subsystem, "hid") == 0)
+        {
+            strncpy(out[count].syspath, path, 255);
+            strcpy(out[count].vidpid, "HID");
+            
+            const char *name = udev_device_get_sysattr_value(dev, "name");
+            if (name)
+            {
+                snprintf(out[count].product, 127, "HID: %s", name);
+            }
+            else
+            {
+                strcpy(out[count].product, "HID Device");
+            }
+        }
+        // Handle SCSI devices  
+        else if (strcmp(subsystem, "scsi") == 0)
+        {
+            strncpy(out[count].syspath, path, 255);
+            strcpy(out[count].vidpid, "SCSI");
+            
+            const char *model = udev_device_get_sysattr_value(dev, "model");
+            const char *vendor = udev_device_get_sysattr_value(dev, "vendor");
+            if (vendor && model)
+            {
+                snprintf(out[count].product, 127, "%s %s", vendor, model);
+            }
+            else
+            {
+                strcpy(out[count].product, "SCSI Device");
             }
         }
         else
         {
-             strncpy(combined_name, "Unknown Device", 127);
-        }
-        
-        if (iface_num)
-        {
-            snprintf(out[count].product, 127, "%.110s (If: %s)", combined_name, iface_num);
-        }
-        else
-        {
-            strncpy(out[count].product, combined_name, 127);
+            // Unknown subsystem, skip
+            udev_device_unref(dev);
+            continue;
         }
 
-        // Check for driver link on the INTERFACE
+        // Check for driver link (common for all devices)
         char driver_path[1024];
         snprintf(driver_path, sizeof(driver_path), "%s/driver", path);
         
@@ -301,10 +434,11 @@ int mc_list_all_usb_devices(mc_device_info_t *out, int max)
         {
             driver_target[len] = '\0';
             const char *dname = strrchr(driver_target, '/');
-            const char *final_driver = dname ? dname + 1 : "generic-usb";
+            const char *final_driver = dname ? dname + 1 : "unknown";
             
-            // FILTERING: Skip Host Controllers explicitly
-            if (strstr(final_driver, "hcd") != NULL || strcmp(final_driver, "hub") == 0)
+            // FILTERING: Skip Host Controllers for USB
+            if (strcmp(subsystem, "usb") == 0 && 
+                (strstr(final_driver, "hcd") != NULL || strcmp(final_driver, "hub") == 0))
             {
                  udev_device_unref(dev);
                  continue;
@@ -317,8 +451,11 @@ int mc_list_all_usb_devices(mc_device_info_t *out, int max)
              strcpy(out[count].driver, "None");
         }
         
+        // Get subsystem (populate new field)
+        strncpy(out[count].subsystem, subsystem, 15);
+        out[count].subsystem[15] = '\0';
+        
         count++;
-        // udev_device_unref(parent); // Incorrect: parent is borrowed from dev
         udev_device_unref(dev);
     }
 
@@ -472,6 +609,156 @@ int mc_driver_is_in_use(const char *driver)
     
     return 0;
 }
+
+/* CHECK IF DEVICE IS INFRASTRUCTURE (bridges, ports, hosts) */
+/* Returns 1 if device is infrastructure that should be hidden, 0 if real endpoint */
+int mc_is_infrastructure_device(const char *syspath, const char *subsystem)
+{
+    if (!syspath || !subsystem)
+    {
+        return 0;
+    }
+
+    struct udev *udev = udev_new();
+    if (!udev)
+    {
+        return 0;
+    }
+
+    struct udev_device *dev = udev_device_new_from_syspath(udev, syspath);
+    if (!dev)
+    {
+        udev_unref(udev);
+        return 0;
+    }
+
+    int is_infra = 0;
+
+    /* PCI Infrastructure Filtering */
+    if (strcmp(subsystem, "pci") == 0)
+    {
+        /* Read PCI class code (24-bit: base class, sub class, prog-if) */
+        const char *class_str = udev_device_get_sysattr_value(dev, "class");
+        if (class_str)
+        {
+            unsigned int class_code = 0;
+            sscanf(class_str, "0x%x", &class_code);
+            
+            /* Extract base class (bits 23-16) and subclass (bits 15-8) */
+            unsigned int base_class = (class_code >> 16) & 0xFF;
+            unsigned int sub_class = (class_code >> 8) & 0xFF;
+            
+            /* Filter infrastructure by class codes:
+             * 
+             * SHOW (Real Endpoints):
+             * 0x01xx - Mass Storage (NVMe, RAID controllers - user-visible)
+             * 0x02xx - Network Controllers (Ethernet, WiFi)
+             * 0x03xx - Display Controllers (GPU)
+             * 0x04xx - Multimedia (Audio, Video)
+             * 0x0c03 - USB Controllers (xHCI, EHCI, OHCI)
+             * 0x0c08 - Firewire
+             * 
+             * HIDE (Infrastructure/Chipset):
+             * 0x06xx - Bridges (all types)
+             * 0x0c05 - SMBus
+             * 0x08xx - System Peripherals (IOMMU, etc.)
+             */
+            
+            /* Rule 1: Filter ALL bridges (class 0x06) */
+            if (base_class == 0x06)
+            {
+                is_infra = 1;
+            }
+            /* Rule 2: Filter SMBus controllers (class 0x0c, subclass 0x05) */
+            else if (base_class == 0x0c && sub_class == 0x05)
+            {
+                is_infra = 1;
+            }
+            /* Rule 3: Filter System Peripherals (class 0x08) - IOMMU, DMA, etc. */
+            else if (base_class == 0x08)
+            {
+                is_infra = 1;
+            }
+        }
+
+        /* Filter by driver name if not already marked as infrastructure */
+        if (!is_infra)
+        {
+            char driver_path[1024];
+            snprintf(driver_path, sizeof(driver_path), "%s/driver", syspath);
+            
+            char driver_target[1024];
+            ssize_t len = readlink(driver_path, driver_target, sizeof(driver_target) - 1);
+            if (len != -1)
+            {
+                driver_target[len] = '\0';
+                const char *driver_name = strrchr(driver_target, '/');
+                if (driver_name)
+                {
+                    driver_name++; /* Skip the '/' */
+                    
+                    /* List of known infrastructure drivers */
+                    const char *infra_drivers[] = {
+                        "pcieport",
+                        "pci_bridge",
+                        "pciehp",
+                        "pcie_aspm",
+                        "pcie_pme",
+                        "pcie_edr",
+                        "shpchp",
+                        "piix4_smbus",  /* AMD/Intel SMBus */
+                        NULL
+                    };
+                    
+                    for (int i = 0; infra_drivers[i] != NULL; i++)
+                    {
+                        if (strcmp(driver_name, infra_drivers[i]) == 0)
+                        {
+                            is_infra = 1;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    /* SCSI Infrastructure Filtering */
+    else if (strcmp(subsystem, "scsi") == 0)
+    {
+        /* Check device type - only show actual storage devices */
+        const char *devtype = udev_device_get_devtype(dev);
+        
+        /* Filter out hosts, targets, and generic SCSI devices */
+        if (devtype)
+        {
+            if (strcmp(devtype, "scsi_host") == 0 ||
+                strcmp(devtype, "scsi_target") == 0 ||
+                strcmp(devtype, "scsi_generic") == 0)
+            {
+                is_infra = 1;
+            }
+        }
+        
+        /* Also check if it's a real device with vendor/model */
+        if (!is_infra)
+        {
+            const char *model = udev_device_get_sysattr_value(dev, "model");
+            const char *vendor = udev_device_get_sysattr_value(dev, "vendor");
+            
+            /* If no vendor AND no model, it's likely not a real device */
+            if (!vendor && !model)
+            {
+                is_infra = 1;
+            }
+        }
+    }
+
+    udev_device_unref(dev);
+    udev_unref(udev);
+    
+    return is_infra;
+}
+
 /* CHECK IF DEVICE SHOULD BE EXCLUDED (e.g. Mass Storage) */
 int mc_is_excluded_device(const char *syspath)
 {

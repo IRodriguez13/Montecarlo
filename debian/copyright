@@ -1,13 +1,13 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: montecarlo
-Source: https://github.com/YourUsername/Montecarlo
+Upstream-Name: Montecarlo
+Source: https://github.com/IRodriguez13/Montecarlo
 
 Files: *
-Copyright: 2025 Ivan Rodriguez <ivanr013@example.com>
+Copyright: 2025 Ivan Rodriguez <ivanrwcm25@gmail.com>
 License: GPL-3.0+
 
 Files: debian/*
-Copyright: 2025 Ivan Rodriguez <ivanr013@example.com>
+Copyright: 2025 Ivan Rodriguez <ivanrwcm25@gmail.com>
 License: GPL-3.0+
 
 License: GPL-3.0+

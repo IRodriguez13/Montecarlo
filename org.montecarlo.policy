@@ -8,16 +8,26 @@
   <vendor_url>https://github.com/IRodriguez13/Montecarlo</vendor_url>
   <icon_name>drive-harddisk-usb</icon_name>
 
-  <action id="org.montecarlo.module-management">
-    <description>Manage kernel modules</description>
-    <message>Authentication is required to load or unload kernel modules</message>
+  <action id="org.montecarlo.loadmodule">
+    <description>Load kernel module</description>
+    <message>Authentication required for Montecarlo</message>
+    <icon_name>drive-harddisk-usb</icon_name>
     <defaults>
       <allow_any>auth_admin</allow_any>
       <allow_inactive>auth_admin</allow_inactive>
-      <allow_active>auth_admin_keep</allow_active>
+      <allow_active>yes</allow_active>
     </defaults>
-    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/montecarlo-helper</annotate>
-    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+  <action id="org.montecarlo.unloadmodule">
+    <description>Unload kernel module</description>
+    <message>Authentication required for Montecarlo</message>
+    <icon_name>drive-harddisk-usb</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
   </action>
 
 </policyconfig>
