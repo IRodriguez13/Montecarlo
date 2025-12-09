@@ -214,6 +214,10 @@ class MontecarloUI(Gtk.Window):
         self.repo_search.connect("search-changed", self.on_repo_search_changed)
         self.repo_box.pack_start(self.repo_search, False, False, 0)
         
+        # Paned layout (List + Details)
+        paned = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
+        self.repo_box.pack_start(paned, True, True, 0)
+        
         # List: Name, Path
         self.repo_store = Gtk.ListStore(str, str) # Name, FullPath
         
@@ -227,17 +231,38 @@ class MontecarloUI(Gtk.Window):
         col_name.set_sort_column_id(0)
         self.repo_tree.append_column(col_name)
         
-        # We don't really need to show the full path, it's clutter. Identifying by name is enough.
-        # But keeping it hidden or just removing it improves UI cleaner. Let's keep it but make it small? 
-        # Or just hide it. The user didn't ask to remove it, but cleaner search results suggest fewer columns.
-        # I'll keep it for transparency as requested in original requirements.
         col_path = Gtk.TreeViewColumn("Path", Gtk.CellRendererText(), text=1)
         self.repo_tree.append_column(col_path)
+        
+        # Connect selection handler
+        self.repo_tree.get_selection().connect("changed", self.on_repo_selection_changed)
         
         scroll = Gtk.ScrolledWindow()
         scroll.set_vexpand(True)
         scroll.add(self.repo_tree)
-        self.repo_box.pack_start(scroll, True, True, 0)
+        paned.pack1(scroll, resize=True, shrink=False)
+        
+        # Details Pane
+        frame_details = Gtk.Frame(label="Module Details")
+        self.repo_details_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        self.repo_details_box.set_border_width(10)
+        
+        self.lbl_repo_module_name = Gtk.Label(label="Select a module to view details.", xalign=0)
+        self.lbl_repo_module_desc = Gtk.Label(label="", xalign=0)
+        self.lbl_repo_module_desc.set_line_wrap(True)
+        
+        self.btn_repo_web_search = Gtk.Button(label="Search on Web")
+        self.btn_repo_web_search.set_valign(Gtk.Align.START)
+        self.btn_repo_web_search.set_halign(Gtk.Align.START)
+        self.btn_repo_web_search.set_sensitive(False)
+        self.btn_repo_web_search.connect("clicked", self.on_repo_web_search_clicked)
+        
+        self.repo_details_box.pack_start(self.lbl_repo_module_name, False, False, 0)
+        self.repo_details_box.pack_start(self.lbl_repo_module_desc, False, False, 0)
+        self.repo_details_box.pack_start(self.btn_repo_web_search, False, False, 5)
+        
+        frame_details.add(self.repo_details_box)
+        paned.pack2(frame_details, resize=False, shrink=False)
         
         # Actions
         btn_box = Gtk.Box(spacing=10)
@@ -247,10 +272,11 @@ class MontecarloUI(Gtk.Window):
         btn_refresh.connect("clicked", self.refresh_repository)
         btn_box.pack_start(btn_refresh, False, False, 0)
         
-        btn_load = Gtk.Button(label="Load Selected Module")
-        btn_load.get_style_context().add_class("suggested-action")
-        btn_load.connect("clicked", self.on_repo_load_clicked)
-        btn_box.pack_start(btn_load, False, False, 0)
+        self.btn_repo_load = Gtk.Button(label="Load Selected Module")
+        self.btn_repo_load.get_style_context().add_class("suggested-action")
+        self.btn_repo_load.set_sensitive(False)
+        self.btn_repo_load.connect("clicked", self.on_repo_load_clicked)
+        btn_box.pack_start(self.btn_repo_load, False, False, 0)
         
         self.repo_box.pack_start(btn_box, False, False, 0)
         
@@ -258,6 +284,7 @@ class MontecarloUI(Gtk.Window):
         
         # Auto-load list in background
         GLib.timeout_add(500, self.refresh_repository)
+
         
     def repo_filter_func(self, model, iter, data):
         query = self.repo_search.get_text().lower()
@@ -308,6 +335,47 @@ class MontecarloUI(Gtk.Window):
             self.repo_store.append(r)
         self.repo_spinner.stop()
         self.log(f"Repository refreshed: {len(rows)} modules available.", "bold")
+    
+    def on_repo_selection_changed(self, selection):
+        model, treeiter = selection.get_selected()
+        if treeiter:
+            self.btn_repo_load.set_sensitive(True)
+            self.btn_repo_web_search.set_sensitive(True)
+            
+            # Update Details
+            module_name = model[treeiter][0]
+            
+            self.lbl_repo_module_name.set_markup(f"<b>Module:</b> {module_name}")
+            
+            # Get Module Description via modinfo
+            desc = "No description available."
+            try:
+                res = subprocess.run(["modinfo", "-F", "description", module_name], capture_output=True, text=True)
+                if res.returncode == 0 and res.stdout.strip():
+                    desc = res.stdout.strip()
+                else:
+                    desc = f"Module {module_name} (No description available)"
+            except Exception:
+                desc = f"Module {module_name}"
+            
+            self.lbl_repo_module_desc.set_markup(f"<i>{desc}</i>")
+        else:
+            self.btn_repo_load.set_sensitive(False)
+            self.btn_repo_web_search.set_sensitive(False)
+            self.lbl_repo_module_name.set_text("Select a module to view details.")
+            self.lbl_repo_module_desc.set_text("")
+    
+    def on_repo_web_search_clicked(self, widget):
+        selection = self.repo_tree.get_selection()
+        model, treeiter = selection.get_selected()
+        if not treeiter:
+            return
+        
+        module_name = model[treeiter][0]
+        
+        # Open Google search for the module
+        url = f"https://www.google.com/search?q=linux+kernel+module+{module_name}"
+        self.open_url(url)
                         
 
     def on_repo_load_clicked(self, widget):
