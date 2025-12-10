@@ -51,20 +51,17 @@ int main(int argc, char *argv[])
     const char *product = udev_device_get_sysattr_value(usb, "idProduct");
 
     if (!vendor)
-    {
         vendor = "(unknown)";
-    }
+
     if (!product)
-    {
         product = "(unknown)";
-    }
+
 
     printf("[worker] iniciado para: %s\n", devpath);
     printf("[worker] vendor:  %s\n", vendor);
     printf("[worker] product: %s\n", product);
 
     udev_device_unref(dev);
-    // usb no se unrefea, es un parent prestado
     udev_unref(udev);
 
     return 0;

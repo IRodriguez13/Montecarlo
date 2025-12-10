@@ -15,13 +15,18 @@ int main(int argc, char *argv[])
     if (strcmp(argv[1], "list") == 0)
     {
         char drivers[256][128];
+
         int total = mc_list_candidate_drivers(drivers, 256);
+
         printf("[\n");
+
         for (int i = 0; i < total; i++)
         {
             printf("  \"%s\"%s\n", drivers[i], (i < total - 1) ? "," : "");
         }
+
         printf("]\n");
+
         return 0;
     }
     else if (strcmp(argv[1], "load") == 0)

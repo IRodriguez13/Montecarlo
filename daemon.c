@@ -22,7 +22,7 @@ void get_socket_path(char *buf, size_t bufsize)
 {
     const char *runtime_dir = getenv("XDG_RUNTIME_DIR");
     uid_t uid = getuid();
-    
+
     /* Prefer XDG_RUNTIME_DIR, fallback to /run/user/$UID, then /tmp */
     if (runtime_dir && runtime_dir[0] != '\0')
     {
@@ -33,7 +33,7 @@ void get_socket_path(char *buf, size_t bufsize)
         /* Check if /run/user/$UID exists */
         char runtime_path[256];
         snprintf(runtime_path, sizeof(runtime_path), "/run/user/%d", uid);
-        
+
         if (access(runtime_path, W_OK) == 0)
         {
             snprintf(buf, bufsize, "%s/montecarlo.sock", runtime_path);
@@ -65,7 +65,7 @@ void cleanup(int signum)
 int init_socket()
 {
     struct sockaddr_un addr;
-    
+
     /* Get secure socket path */
     get_socket_path(socket_path, sizeof(socket_path));
 
@@ -81,7 +81,7 @@ int init_socket()
 
     unlink(socket_path);
 
-    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) == -1)
+    if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) == -1)
     {
         perror("[daemon] bind error");
         return -1;
@@ -92,7 +92,7 @@ int init_socket()
         perror("[daemon] listen error");
         return -1;
     }
-    
+
     /* Restrict to user only (0600) for security */
     chmod(socket_path, 0600);
 
@@ -103,18 +103,20 @@ int init_socket()
  * Handle client connection.
  * Simplified Protocol: Accept -> Send Target Syspath -> Close.
  */
-void handle_client() 
+void handle_client()
 {
     struct sockaddr_un client_addr;
+    
     socklen_t len = sizeof(client_addr);
-    int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &len);
+    
+    int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &len);
+    
     if (client_fd == -1)
-    {
         return;
-    }
+
 
     /* Send the current target syspath if available */
-    if (current_syspath[0] != '\0') 
+    if (current_syspath[0] != '\0')
     {
         char buf[1024];
         snprintf(buf, sizeof(buf), "{\"event\": \"add\", \"syspath\": \"%.900s\"}", current_syspath);
@@ -148,27 +150,27 @@ int main(int argc, char *argv[])
             return 0;
         }
     }
-    
+
     printf("[daemon] Starting Montecarlo Daemon v%s...\n", MONTECARLO_VERSION);
 
     signal(SIGINT, cleanup);
     signal(SIGTERM, cleanup);
 
-    if (init_socket() == -1) 
+    if (init_socket() == -1)
     {
         fprintf(stderr, "[daemon] Failed to init socket\n");
         return 1;
     }
 
     struct udev *udev = udev_new();
-    if (!udev) 
+    if (!udev)
     {
         fprintf(stderr, "[daemon] udev_new failed\n");
         return 1;
     }
 
     struct udev_monitor *mon = udev_monitor_new_from_netlink(udev, "udev");
-    if (!mon) 
+    if (!mon)
     {
         fprintf(stderr, "[daemon] udev_monitor failed\n");
         return 1;
@@ -185,7 +187,7 @@ int main(int argc, char *argv[])
 
     printf("[daemon] Listening on %s and UDev...\n", socket_path);
 
-    for (;;) 
+    for (;;)
     {
         fd_set fds;
         FD_ZERO(&fds);
@@ -196,23 +198,22 @@ int main(int argc, char *argv[])
 
         if (select(max_fd + 1, &fds, NULL, NULL, NULL) > 0)
         {
-            
+
             /* 1. Incoming Socket Connection */
-            if (FD_ISSET(server_fd, &fds)) 
-            {
+            if (FD_ISSET(server_fd, &fds))
                 handle_client();
-            }
+        
 
             /* 2. Incoming UDev Event */
-            if (FD_ISSET(udev_fd, &fds)) 
+            if (FD_ISSET(udev_fd, &fds))
             {
                 struct udev_device *dev = udev_monitor_receive_device(mon);
-                if (dev) 
+                if (dev)
                 {
                     const char *action = udev_device_get_action(dev);
                     const char *syspath = udev_device_get_syspath(dev);
 
-                    if (action && strcmp(action, "add") == 0) 
+                    if (action && strcmp(action, "add") == 0)
                     {
                         printf("[daemon] add: %s\n", syspath);
 
@@ -224,16 +225,16 @@ int main(int argc, char *argv[])
                         }
 
                         /* Check if the device already has a driver bound (ignoring interfaces) */
-                        if (mc_dev_has_driver(syspath)) 
+                        if (mc_dev_has_driver(syspath))
                         {
                             printf("[daemon] Driver already present. Ignoring.\n");
                             current_syspath[0] = '\0';
                         }
-                        else 
+                        else
                         {
                             printf("[daemon] No driver found. Triggering UI.\n");
                             strncpy(current_syspath, syspath, sizeof(current_syspath) - 1);
-                            
+
                             /* Check if UI is already running */
                             int ui_running = 0;
                             FILE *pf = fopen("/tmp/montecarlo_ui.pid", "r");
@@ -243,9 +244,8 @@ int main(int argc, char *argv[])
                                 if (fscanf(pf, "%d", &pid) == 1)
                                 {
                                     if (kill(pid, 0) == 0)
-                                    {
                                         ui_running = 1;
-                                    }
+                                    
                                 }
                                 fclose(pf);
                             }
@@ -258,13 +258,13 @@ int main(int argc, char *argv[])
                             {
                                 /* Launch the User Interface */
                                 pid_t pid = fork();
-                                if (pid == 0) 
+                                if (pid == 0)
                                 {
                                     /* Child Process */
                                     setenv("DISPLAY", ":0", 0); /* Hack for demo environment */
-                                    
+
                                     /* Path Logic */
-                                    if (getenv("MONTECARLO_DEV")) 
+                                    if (getenv("MONTECARLO_DEV"))
                                     {
                                         /* Dev Mode: ui.py in cwd */
                                         printf("[daemon] Launching UI in DEV mode (cwd)\n");
@@ -276,7 +276,7 @@ int main(int argc, char *argv[])
                                         /* We call python3 directly on the full path */
                                         execlp("python3", "python3", "/usr/share/montecarlo/ui.py", NULL);
                                     }
-                                    
+
                                     /* If execlp returns, it failed */
                                     perror("[daemon] execlp failed");
                                     exit(1);
@@ -289,12 +289,11 @@ int main(int argc, char *argv[])
                             }
                         }
                     }
-                    else if (action && strcmp(action, "remove") == 0) 
+                    else if (action && strcmp(action, "remove") == 0)
                     {
-                         if (syspath && strcmp(syspath, current_syspath) == 0) 
-                         {
-                             current_syspath[0] = '\0';
-                         }
+                        if (syspath && strcmp(syspath, current_syspath) == 0)
+                            current_syspath[0] = '\0';
+                        
                     }
                     udev_device_unref(dev);
                 }
