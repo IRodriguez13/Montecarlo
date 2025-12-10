@@ -4,3 +4,4 @@ libmontecarlo.so
 montecarlo-daemon
 montecarlo_cli
 *.o
+__pycache__

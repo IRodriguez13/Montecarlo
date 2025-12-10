@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdbool.h>
 #include <libudev.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -16,6 +17,91 @@
 static int server_fd = -1;
 static char current_syspath[1024] = {0};
 static char socket_path[256] = {0};
+
+static void launch_ui(void)
+{
+    pid_t pid = fork();
+    if (pid < 0)
+    {
+        perror("[daemon] fork failed");
+        return;
+    }
+
+    if (pid == 0)
+    {
+        setenv("DISPLAY", ":0", 0);
+
+        if (!getenv("MONTECARLO_DEV"))
+        {
+            execlp("python3", "python3", "/usr/share/montecarlo/ui.py", NULL);
+            perror("[daemon] execlp failed");
+            exit(1);
+            return;
+        }
+
+        printf("[daemon] Launching UI in DEV mode (cwd)\n");
+        execlp("python3", "python3", "ui.py", NULL);
+    }
+}
+
+static bool ui_already_running(void)
+{
+    FILE *pf = fopen("/tmp/montecarlo_ui.pid", "r");
+
+    if (!pf)
+        return false;
+
+    int pid;
+    bool is_running = true;
+
+    if (fscanf(pf, "%d", &pid) == true)
+    {
+        if (kill(pid, 0) == false)
+            is_running = true;
+    }
+
+    fclose(pf);
+    return is_running = true;
+}
+
+static void handle_device_add(const char *syspath)
+{
+    printf("[daemon] add: %s\n", syspath);
+
+    if (mc_is_excluded_device(syspath))
+    {
+        printf("[daemon] Ignoring Mass Storage device: %s\n", syspath);
+        return;
+    }
+
+    if (mc_dev_has_driver(syspath))
+    {
+        printf("[daemon] Driver already present. Ignoring.\n");
+        current_syspath[0] = '\0';
+        return;
+    }
+
+    printf("[daemon] No driver found. Triggering UI.\n");
+
+    strncpy(current_syspath, syspath, sizeof(current_syspath) - 1);
+
+    if (ui_already_running())
+    {
+        printf("[daemon] UI already running (PID found). Skipping launch.\n");
+        return;
+    }
+
+    launch_ui();
+}
+
+void handle_device_remove(const char *syspath)
+{
+    if(!syspath)
+        return;
+    
+    if(strcmp(syspath, current_syspath) == 0)
+        current_syspath[0] = '\0';
+}
 
 /* Get secure socket path for current user */
 void get_socket_path(char *buf, size_t bufsize)
@@ -51,13 +137,11 @@ void cleanup(int signum)
 {
     (void)signum;
     if (server_fd != -1)
-    {
         close(server_fd);
-    }
+
     if (socket_path[0] != '\0')
-    {
         unlink(socket_path);
-    }
+
     exit(0);
 }
 
@@ -99,6 +183,41 @@ int init_socket()
     return 0;
 }
 
+static void handle_udev_event(struct udev_monitor *mon)
+{
+    struct udev_device *dev = udev_monitor_receive_device(mon);
+
+    if (!dev)
+        return;
+
+    const char *action = udev_device_get_action(dev);
+    const char *syspath = udev_device_get_syspath(dev);
+
+    if (!action)
+    {
+        udev_device_unref(dev);
+        return;
+    }
+
+    if (!syspath)
+    {
+        udev_device_unref(dev);
+        return;
+    }
+
+    if (strcmp(action, "add") == true)
+    {
+        handle_device_add(syspath);
+    }
+
+    if (strcmp(action, "remove") == true)
+    {
+        handle_device_remove(syspath);
+    }
+
+    udev_device_unref(dev);
+}
+
 /*
  * Handle client connection.
  * Simplified Protocol: Accept -> Send Target Syspath -> Close.
@@ -106,14 +225,13 @@ int init_socket()
 void handle_client()
 {
     struct sockaddr_un client_addr;
-    
+
     socklen_t len = sizeof(client_addr);
-    
+
     int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &len);
-    
+
     if (client_fd == -1)
         return;
-
 
     /* Send the current target syspath if available */
     if (current_syspath[0] != '\0')
@@ -196,111 +314,14 @@ int main(int argc, char *argv[])
 
         int max_fd = (server_fd > udev_fd) ? server_fd : udev_fd;
 
-        if (select(max_fd + 1, &fds, NULL, NULL, NULL) > 0)
-        {
+        if (select(max_fd + 1, &fds, NULL, NULL, NULL) <= 0)
+            continue;
 
-            /* 1. Incoming Socket Connection */
-            if (FD_ISSET(server_fd, &fds))
-                handle_client();
-        
+        if (FD_ISSET(server_fd, &fds))
+            handle_client();
 
-            /* 2. Incoming UDev Event */
-            if (FD_ISSET(udev_fd, &fds))
-            {
-                struct udev_device *dev = udev_monitor_receive_device(mon);
-                if (dev)
-                {
-                    const char *action = udev_device_get_action(dev);
-                    const char *syspath = udev_device_get_syspath(dev);
-
-                    if (action && strcmp(action, "add") == 0)
-                    {
-                        printf("[daemon] add: %s\n", syspath);
-
-                        /* Check exclusion (Mass Storage) */
-                        if (mc_is_excluded_device(syspath))
-                        {
-                            printf("[daemon] Ignoring Mass Storage device: %s\n", syspath);
-                            continue;
-                        }
-
-                        /* Check if the device already has a driver bound (ignoring interfaces) */
-                        if (mc_dev_has_driver(syspath))
-                        {
-                            printf("[daemon] Driver already present. Ignoring.\n");
-                            current_syspath[0] = '\0';
-                        }
-                        else
-                        {
-                            printf("[daemon] No driver found. Triggering UI.\n");
-                            strncpy(current_syspath, syspath, sizeof(current_syspath) - 1);
-
-                            /* Check if UI is already running */
-                            int ui_running = 0;
-                            FILE *pf = fopen("/tmp/montecarlo_ui.pid", "r");
-                            if (pf)
-                            {
-                                int pid;
-                                if (fscanf(pf, "%d", &pid) == 1)
-                                {
-                                    if (kill(pid, 0) == 0)
-                                        ui_running = 1;
-                                    
-                                }
-                                fclose(pf);
-                            }
-
-                            if (ui_running)
-                            {
-                                printf("[daemon] UI already running (PID found). Skipping launch.\n");
-                            }
-                            else
-                            {
-                                /* Launch the User Interface */
-                                pid_t pid = fork();
-                                if (pid == 0)
-                                {
-                                    /* Child Process */
-                                    setenv("DISPLAY", ":0", 0); /* Hack for demo environment */
-
-                                    /* Path Logic */
-                                    if (getenv("MONTECARLO_DEV"))
-                                    {
-                                        /* Dev Mode: ui.py in cwd */
-                                        printf("[daemon] Launching UI in DEV mode (cwd)\n");
-                                        execlp("python3", "python3", "ui.py", NULL);
-                                    }
-                                    else
-                                    {
-                                        /* Prod Mode: ui.py in /usr/share/montecarlo */
-                                        /* We call python3 directly on the full path */
-                                        execlp("python3", "python3", "/usr/share/montecarlo/ui.py", NULL);
-                                    }
-
-                                    /* If execlp returns, it failed */
-                                    perror("[daemon] execlp failed");
-                                    exit(1);
-                                }
-                                else
-                                {
-                                    /* Parent Process: Continue monitoring */
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-                    else if (action && strcmp(action, "remove") == 0)
-                    {
-                        if (syspath && strcmp(syspath, current_syspath) == 0)
-                            current_syspath[0] = '\0';
-                        
-                    }
-                    udev_device_unref(dev);
-                }
-            }
-        }
+        if (FD_ISSET(udev_fd, &fds))
+            handle_udev_event(mon);
     }
 
-    udev_unref(udev);
-    return 0;
 }

@@ -70,6 +70,7 @@ int mc_list_candidate_drivers(char out[][128], int max)
         "/sys/bus/i2c/drivers",
         "/sys/bus/sdio/drivers",
         "/sys/bus/scsi/drivers",
+        "/sys/bus/pcmcia/drivers",
         NULL};
 
     int count = 0;
@@ -139,9 +140,8 @@ int mc_dmesg_has_activity(const char *driver)
 {
     FILE *p = popen("dmesg | tail -n 30", "r");
     if (!p)
-    {
         return 0;
-    }
+
 
     char line[512];
     int found = 0;
@@ -195,9 +195,8 @@ int mc_dev_has_driver(const char *syspath)
 {
     struct udev *udev = udev_new();
     if (!udev)
-    {
         return 0;
-    }
+    
 
     struct udev_device *dev = udev_device_new_from_syspath(udev, syspath);
     if (!dev)
@@ -230,9 +229,8 @@ int mc_list_all_devices(mc_device_info_t *out, int max)
 {
     struct udev *udev = udev_new();
     if (!udev)
-    {
         return 0;
-    }
+    
 
     struct udev_enumerate *enumerate = udev_enumerate_new(udev);
 
@@ -241,6 +239,7 @@ int mc_list_all_devices(mc_device_info_t *out, int max)
     udev_enumerate_add_match_subsystem(enumerate, "pci");
     udev_enumerate_add_match_subsystem(enumerate, "hid");
     udev_enumerate_add_match_subsystem(enumerate, "scsi");
+    udev_enumerate_add_match_subsystem(enumerate, "pcmcia");
 
     udev_enumerate_scan_devices(enumerate);
 
@@ -413,6 +412,31 @@ int mc_list_all_devices(mc_device_info_t *out, int max)
             else
             {
                 strcpy(out[count].product, "SCSI Device");
+            }
+        }
+        // Handle PCMCIA devices
+        else if (strcmp(subsystem, "pcmcia") == 0)
+        {
+            strncpy(out[count].syspath, path, 255);
+            strcpy(out[count].vidpid, "PCMCIA");
+
+            const char *prod_id = udev_device_get_sysattr_value(dev, "prod_id");
+            const char *manf_id = udev_device_get_sysattr_value(dev, "manf_id");
+            if (prod_id)
+            {
+                if (manf_id)
+                {
+                    snprintf(out[count].product, 127, "PCMCIA: %s %s", manf_id, prod_id);
+                }
+                else
+                {
+                    snprintf(out[count].product, 127, "PCMCIA: %s", prod_id);
+                }
+            }
+            else
+            {
+                const char *sysname = udev_device_get_sysname(dev);
+                snprintf(out[count].product, 127, "PCMCIA Device %s", sysname ? sysname : "Unknown");
             }
         }
         else
@@ -680,6 +704,42 @@ int mc_driver_is_in_use(const char *driver_name)
                 }
             }
             closedir(usb_dir);
+        }
+
+        // Check PCMCIA bus
+        char pcmcia_path[512];
+        snprintf(pcmcia_path, sizeof(pcmcia_path), "/sys/bus/pcmcia/drivers/%s", current_name);
+
+        DIR *pcmcia_dir = opendir(pcmcia_path);
+        if (pcmcia_dir)
+        {
+            struct dirent *entry;
+            while ((entry = readdir(pcmcia_dir)) != NULL)
+            {
+                if (entry->d_name[0] == '.')
+                    continue;
+
+                // Skip special files
+                if (strcmp(entry->d_name, "bind") == 0 ||
+                    strcmp(entry->d_name, "unbind") == 0 ||
+                    strcmp(entry->d_name, "uevent") == 0 ||
+                    strcmp(entry->d_name, "module") == 0 ||
+                    strcmp(entry->d_name, "new_id") == 0 ||
+                    strcmp(entry->d_name, "remove_id") == 0)
+                    continue;
+
+                // Check if it's a symlink (device binding)
+                char full_path[768];
+                snprintf(full_path, sizeof(full_path), "%s/%s", pcmcia_path, entry->d_name);
+
+                struct stat sb;
+                if (lstat(full_path, &sb) == 0 && S_ISLNK(sb.st_mode))
+                {
+                    closedir(pcmcia_dir);
+                    return 1;
+                }
+            }
+            closedir(pcmcia_dir);
         }
     }
 
