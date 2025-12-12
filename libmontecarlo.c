@@ -719,14 +719,6 @@ int mc_driver_is_in_use(const char *driver_name)
 
 /* CHECK IF DEVICE IS INFRASTRUCTURE (bridges, ports, hosts) */
 /* Returns 1 if device is infrastructure that should be hidden, 0 if real endpoint */
-#include <stdbool.h>
-#include <string.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <libudev.h>
-
-/* CHECK IF DEVICE IS INFRASTRUCTURE (bridges, ports, hosts) */
-/* Returns 1 if device is infrastructure that should be hidden, 0 if real endpoint */
 int mc_is_infrastructure_device(const char *syspath, const char *subsystem)
 {
     if (!syspath || !subsystem)
