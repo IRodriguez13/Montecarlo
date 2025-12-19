@@ -6,6 +6,7 @@
  * with proper input sanitization to prevent command injection.
  */
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,18 +18,18 @@
  * Sanitize module name to prevent command injection
  * Only allows: alphanumeric characters, underscore, and dash
  */
-int is_valid_module_name(const char *name)
+bool is_valid_module_name(const char *name)
 {
     if (!name || strlen(name) == 0 || strlen(name) >= MAX_MODULE_NAME)
-        return 0;
+        return false;
 
     for (int i = 0; name[i]; i++)
     {
         if (!isalnum(name[i]) && name[i] != '_' && name[i] != '-')
-            return 0;
+            return false;
     }
 
-    return 1;
+    return true;
 }
 
 int main(int argc, char *argv[])
@@ -60,26 +61,24 @@ int main(int argc, char *argv[])
 
     // Build command
     char cmd[256];
-    if (strcmp(action, "load") == 0)
+    if (strcmp(action, "load") != 0)
     {
-        snprintf(cmd, sizeof(cmd), "modprobe %s 2>&1", module);
-    }
-    else
-    { 
         snprintf(cmd, sizeof(cmd), "modprobe -r %s 2>&1", module);
+        return 1;
     }
+    
+    snprintf(cmd, sizeof(cmd), "modprobe %s 2>&1", module);
 
     // Execute
     int ret = system(cmd);
 
-    if (ret == 0)
+    if (ret != 0)
     {
-        fprintf(stdout, "SUCCESS: Module %s %sed\n", module, action);
-        return 0;
-    }
-    else
-    {
+
         fprintf(stderr, "FAILED: Could not %s module %s\n", action, module);
         return 1;
     }
+
+    fprintf(stdout, "SUCCESS: Module %s %sed\n", module, action);
+    return 0;
 }
