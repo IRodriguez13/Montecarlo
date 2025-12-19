@@ -14,10 +14,12 @@
 
 #define MAX_MODULE_NAME 64
 
-/*
- * Sanitize module name to prevent command injection
- * Only allows: alphanumeric characters, underscore, and dash
- */
+
+bool is_valid_char_name(const char c)
+{
+    return(c) || c == '_' || c == '-';
+}
+
 bool is_valid_module_name(const char *name)
 {
     if (!name || strlen(name) == 0 || strlen(name) >= MAX_MODULE_NAME)
@@ -25,7 +27,7 @@ bool is_valid_module_name(const char *name)
 
     for (int i = 0; name[i]; i++)
     {
-        if (!isalnum(name[i]) && name[i] != '_' && name[i] != '-')
+        if (!is_valid_char_name(name[i]))
             return false;
     }
 
@@ -74,7 +76,6 @@ int main(int argc, char *argv[])
 
     if (ret != 0)
     {
-
         fprintf(stderr, "FAILED: Could not %s module %s\n", action, module);
         return 1;
     }

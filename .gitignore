@@ -5,3 +5,4 @@ montecarlo-daemon
 montecarlo_cli
 *.o
 __pycache__
+montecarlo-helper
