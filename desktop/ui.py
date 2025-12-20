@@ -13,7 +13,7 @@ import webbrowser
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version('Notify', '0.7')
-from gi.repository import Gtk, GLib, Pango, Notify
+from gi.repository import Gtk, GLib, Pango, Notify, Gdk
 
 # --- CONFIG & LIBS ---
 
@@ -38,13 +38,17 @@ def get_socket_path():
     return f"/tmp/montecarlo-{uid}.sock"
 
 SOCK_PATH = get_socket_path()
-HELPER_PATH = os.environ.get("MONTECARLO_DEV") and "./montecarlo-helper" or "/usr/bin/montecarlo-helper"
 
-# Lib Path (dev vs production)
+# Path resolution from desktop/ subdir
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if os.environ.get("MONTECARLO_DEV"):
-    LIB_PATH = os.path.abspath("./libmontecarlo.so")
+    HELPER_PATH = os.path.join(BASE_DIR, "montecarlo-helper")
+    LIB_PATH = os.path.join(BASE_DIR, "libmontecarlo.so")
+    LIBSD_PATH = os.path.join(BASE_DIR, "systemd/libsystemdctl.so")
 else:
+    HELPER_PATH = "/usr/bin/montecarlo-helper"
     LIB_PATH = "/usr/lib/libmontecarlo.so"
+    LIBSD_PATH = "/usr/lib/libsystemdctl.so"
 
 try:
     libmc = CDLL(LIB_PATH)
@@ -108,12 +112,7 @@ class ServiceInfo(Structure):
         ("sub_state", c_char * 32)
     ]
 
-# Load Systemd Lib
-if os.environ.get("MONTECARLO_DEV"):
-    LIBSD_PATH = os.path.abspath("systemd/libsystemdctl.so")
-else:
-    LIBSD_PATH = "/usr/lib/libsystemdctl.so"
-
+# Load Systemd Lib (Path already set in config)
 try:
     libsd = CDLL(LIBSD_PATH)
     libsd.mc_list_services.argtypes = [POINTER(ServiceInfo), c_int]
@@ -784,10 +783,20 @@ class MontecarloUI(Gtk.Window):
             
             if result.returncode == 0:
                 self.log(f"  -> Success: {service} {action}d", "green")
+                
+                # Add to Restore List if stopped/disabled
+                if action in ["stop", "disable"]:
+                    self.add_restore_item("Service", service)
+                
+                # Refresh immediately and then again after 1s to catch state changes
                 self.refresh_services()
+                GLib.timeout_add(1500, self.refresh_services)
+                
+                Notify.Notification.new("Service Manager", f"Successfully {action}d {service}", "emblem-system").show()
             else:
                 err = result.stderr.strip()
                 self.log(f"  -> Failed: {err}", "red")
+                Notify.Notification.new("Service Error", f"Failed to {action} {service}: {err}", "dialog-error").show()
                 
         except Exception as e:
             self.log(f"Error executing service action: {e}", "red")
@@ -918,37 +927,150 @@ class MontecarloUI(Gtk.Window):
         self.restore_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.restore_box.set_border_width(10)
         
-        lbl = Gtk.Label(label="Unloaded Modules History", xalign=0)
-        lbl.get_style_context().add_class("title-3")
-        self.restore_box.pack_start(lbl, False, False, 0)
+        # Split View
+        paned = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
+        self.restore_box.pack_start(paned, True, True, 0)
         
-        # Store: Module Name
-        self.restore_store = Gtk.ListStore(str)
-        self.restore_tree = Gtk.TreeView(model=self.restore_store)
-        self.restore_tree.append_column(Gtk.TreeViewColumn("Module", Gtk.CellRendererText(), text=0))
+        # --- TOP: MODULES ---
+        frame_mod = Gtk.Frame(label="Unloaded Drivers")
+        mod_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        mod_box.set_border_width(5)
         
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_vexpand(True)
-        scroll.add(self.restore_tree)
-        self.restore_box.pack_start(scroll, True, True, 0)
+        self.restore_modules_store = Gtk.ListStore(str) # Name
+        self.restore_modules_tree = Gtk.TreeView(model=self.restore_modules_store)
+        self.restore_modules_tree.append_column(Gtk.TreeViewColumn("Module Name", Gtk.CellRendererText(), text=0))
         
-        btn_restore = Gtk.Button(label="Reload Selected Module")
-        btn_restore.set_image(Gtk.Image.new_from_icon_name("view-refresh", Gtk.IconSize.BUTTON))
-        btn_restore.connect("clicked", self.on_restore_clicked)
+        scroll_mod = Gtk.ScrolledWindow()
+        scroll_mod.set_vexpand(True)
+        scroll_mod.add(self.restore_modules_tree)
+        mod_box.pack_start(scroll_mod, True, True, 0)
         
-        btn_clear = Gtk.Button(label="Clear History")
-        btn_clear.set_image(Gtk.Image.new_from_icon_name("edit-clear", Gtk.IconSize.BUTTON))
-        btn_clear.connect("clicked", self.on_clear_restore_clicked)
+        btn_box_mod = Gtk.Box(spacing=5)
+        btn_restore_mod = Gtk.Button(label="Reload Driver")
+        btn_restore_mod.connect("clicked", self.on_restore_module_clicked)
+        btn_clear_mod = Gtk.Button(label="Clear List")
+        btn_clear_mod.connect("clicked", self.on_clear_modules_clicked)
         
-        btn_box = Gtk.ButtonBox(orientation=Gtk.Orientation.HORIZONTAL)
-        btn_box.set_layout(Gtk.ButtonBoxStyle.START)
-        btn_box.set_spacing(10)
-        btn_box.pack_start(btn_restore, False, False, 0)
-        btn_box.pack_start(btn_clear, False, False, 0)
+        btn_box_mod.pack_start(btn_restore_mod, False, False, 0)
+        btn_box_mod.pack_start(btn_clear_mod, False, False, 0)
+        mod_box.pack_start(btn_box_mod, False, False, 0)
         
-        self.restore_box.pack_start(btn_box, False, False, 0)
+        frame_mod.add(mod_box)
+        paned.pack1(frame_mod, resize=True, shrink=False)
         
-        self.notebook.append_page(self.restore_box, Gtk.Label(label="Restore"))
+        # --- BOTTOM: SERVICES ---
+        frame_svc = Gtk.Frame(label="Stopped Services")
+        svc_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        svc_box.set_border_width(5)
+        
+        self.restore_services_store = Gtk.ListStore(str) # Name
+        self.restore_services_tree = Gtk.TreeView(model=self.restore_services_store)
+        self.restore_services_tree.append_column(Gtk.TreeViewColumn("Service Name", Gtk.CellRendererText(), text=0))
+        
+        scroll_svc = Gtk.ScrolledWindow()
+        scroll_svc.set_vexpand(True)
+        scroll_svc.add(self.restore_services_tree)
+        svc_box.pack_start(scroll_svc, True, True, 0)
+        
+        btn_box_svc = Gtk.Box(spacing=5)
+        btn_restore_svc = Gtk.Button(label="Restart Service")
+        btn_restore_svc.connect("clicked", self.on_restore_service_clicked)
+        btn_clear_svc = Gtk.Button(label="Clear List")
+        btn_clear_svc.connect("clicked", self.on_clear_services_clicked)
+        
+        btn_box_svc.pack_start(btn_restore_svc, False, False, 0)
+        btn_box_svc.pack_start(btn_clear_svc, False, False, 0)
+        svc_box.pack_start(btn_box_svc, False, False, 0)
+        
+        frame_svc.add(svc_box)
+        paned.pack2(frame_svc, resize=True, shrink=False)
+        
+        # Custom Tab Label with Badge
+        tab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        lbl_tab = Gtk.Label(label="Restore")
+        self.lbl_restore_badge = Gtk.Label(label="0")
+        
+        # Badge Styling
+        ctx = self.lbl_restore_badge.get_style_context()
+        ctx.add_class("badge")
+        css_provider = Gtk.CssProvider()
+        css = b".badge { background-color: #CC0000; color: white; border-radius: 10px; padding: 2px 6px; font-weight: bold; font-size: 10px; }"
+        css_provider.load_from_data(css)
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        self.lbl_restore_badge.set_visible(False)
+
+        tab_box.pack_start(lbl_tab, False, False, 0)
+        tab_box.pack_start(self.lbl_restore_badge, False, False, 0)
+        tab_box.show_all()
+        self.lbl_restore_badge.set_visible(False)
+
+        self.notebook.append_page(self.restore_box, tab_box)
+
+    def add_restore_item(self, item_type, name):
+        store = self.restore_modules_store if item_type == "Module" else self.restore_services_store
+        
+        # Check duplicates
+        for row in store:
+            if row[0] == name:
+                return # Already exists
+        
+        store.append([name])
+        self.update_restore_badge()
+        
+    def update_restore_badge(self):
+        total = len(self.restore_modules_store) + len(self.restore_services_store)
+        self.lbl_restore_badge.set_text(str(total))
+        self.lbl_restore_badge.set_visible(total > 0)
+
+    def on_restore_module_clicked(self, widget):
+        selection = self.restore_modules_tree.get_selection()
+        model, treeiter = selection.get_selected()
+        if not treeiter: return
+        
+        name = model[treeiter][0]
+        self.log(f"Reloading Module: {name}...", "bold")
+        
+        try:
+            subprocess.run(["pkexec", HELPER_PATH, "load", name], check=True)
+            self.log(f"  -> Module {name} reloaded.", "green")
+            
+            self.restore_modules_store.remove(treeiter)
+            self.update_restore_badge()
+            
+            subprocess.run(["udevadm", "settle"], capture_output=True)
+            self.refresh_devices()
+        except Exception as e:
+            self.log(f"  -> Failed: {e}", "red")
+
+    def on_clear_modules_clicked(self, widget):
+        self.restore_modules_store.clear()
+        self.update_restore_badge()
+
+    def on_restore_service_clicked(self, widget):
+        selection = self.restore_services_tree.get_selection()
+        model, treeiter = selection.get_selected()
+        if not treeiter: return
+        
+        name = model[treeiter][0]
+        self.log(f"Restarting Service: {name}...", "bold")
+        
+        try:
+            subprocess.run(["pkexec", HELPER_PATH, "service", "start", name], check=True)
+            self.log(f"  -> Service {name} started.", "green")
+            
+            self.restore_services_store.remove(treeiter)
+            self.update_restore_badge()
+            
+            self.refresh_services()
+            GLib.timeout_add(1500, self.refresh_services)
+        except Exception as e:
+            self.log(f"  -> Failed: {e}", "red")
+
+    def on_clear_services_clicked(self, widget):
+        self.restore_services_store.clear()
+        self.update_restore_badge()
 
     def build_about_tab(self):
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
