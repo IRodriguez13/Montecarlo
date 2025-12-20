@@ -6,3 +6,4 @@ montecarlo_cli
 *.o
 __pycache__
 montecarlo-helper
+systemd/libsystemdctl.so
