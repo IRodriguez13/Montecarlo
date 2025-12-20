@@ -34,13 +34,21 @@ Don't know which driver to use? Browse your kernel's native module repository. Y
 ![Module Repository](Assets/modls.png)
 *Search and load drivers specific to your kernel version.*
 
-### 3. Telemetry & Logs
+### 3. System Services (New)
+Manage your standard linux services transparently. Montecarlo integrates with Systemd to show you what's running, failed, or inactive.
+*   **Privileged Control**: Start, Stop, Enable, or Disable services using strict PolicyKit authentication.
+*   **State Awareness**: Color-coded states to quickly identify failed or running services.
+
+![Services Manager](Assets/services.png)
+*Secure service management via PolicyKit.*
+
+### 4. Telemetry & Logs
 Transparency is key. Watch Montecarlo's decision-making process in real-time. See exactly what the daemon is doing, which devices are detected, and why a driver is allowed or blocked.
 
 ![Real-time Logs](Assets/logs.png)
 *Detailed audit log of all actions.*
 
-### 4. Restore & History
+### 5. Restore & History
 Made a mistake? The Restore tab keeps a history of all modules unloaded during the session, allowing you to quickly reload them with a single click.
 
 ![Restore History](Assets/restore.png)
@@ -50,37 +58,43 @@ Made a mistake? The Restore tab keeps a history of all modules unloaded during t
 
 ## Architecture
 
-The system consists of three main components: a C Daemon, a Python UI, and a Shared Library.
+The system consists of modular components: a C Daemon, a Python UI, a Shared Library, and a Privileged Helper.
 
 ```mermaid
 graph TD
     subgraph Kernel Space
         UD["UDev Events"] --> Daemon
         Drivers["Kernel Drivers"]
+        Systemd["Systemd Manager"]
     end
 
     subgraph User Space
         Daemon["Daemon Service<br>(C / Systemd)"]
         Socket(("Unix Socket<br>/tmp/montecarlo.sock"))
         UI["User Interface<br>(Python / GTK)"]
-        Lib["Shared Library<br>(libmontecarlo.so)"]
+        Lib["Core Library<br>(montecarlo/libmontecarlo.so)"]
+        Helper["Privileged Helper<br>(montecarlo/helper)"]
+        LibSD["Systemd Wrapper<br>(systemd/libsystemdctl.so)"]
     end
 
     Daemon -->|Listens| UD
     Daemon -->|Launches on Match| UI
     Daemon -->|Sends Target Syspath| Socket
     UI -->|Connects| Socket
-    UI -->|Calls via Ctypes| Lib
+    UI -->|Read Info| Lib
+    UI -->|List Services| LibSD
+    UI -.->|Pkexec (Root)| Helper
+    Helper -->|Links| LibSD
+    LibSD -->|D-Bus| Systemd
     Lib -->|modprobe / rmmod| Drivers
-    Lib -->|Checks Binding/Dmesg| Drivers
 ```
 
 ## Installation and Testing
 
 ### Prerequisites
 *   `gcc`, `make`
-*   `libudev-dev`
-*   `python3`, `python3-gi` (GTK3)
+*   `libudev-dev`, `libsystemd-dev`
+*   `python3`, `python3-gi`, `policykit-1` (GTK3)
 
 ### Build
 ```bash
@@ -88,7 +102,7 @@ graph TD
 git clone https://github.com/IRodriguez13/Montecarlo.git
 cd Montecarlo
 
-# Build Daemon and Shared Library
+# Build All Components (Daemon, Libraries, Helper, CLI)
 make
 ```
 
@@ -96,9 +110,10 @@ make
 To test the UI without installing the system service:
 
 ```bash
-sudo MONTECARLO_DEV=1 python3 ui.py
+# Rebuild for development (sets RPATH)
+make dev
 ```
-
+*(The UI will launch automatically)*
 ## License
 
 This project is licensed under the **GNU General Public License v3.0 (GPLv3)**.

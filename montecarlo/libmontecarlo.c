@@ -132,6 +132,12 @@ int mc_unload_driver(const char *driver)
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "modprobe -r %s 2>/dev/null", driver);
     int r = system(cmd);
+    
+    if(WEXITSTATUS(r)!= 0)
+    {
+        printf("Err en la descarga de drivers.");
+        return -1;
+    }
     return (WEXITSTATUS(r) == 0);
 }
 
@@ -139,17 +145,18 @@ int mc_unload_driver(const char *driver)
 int mc_dmesg_has_activity(const char *driver)
 {
     FILE *p = popen("dmesg | tail -n 30", "r");
+    
     if (!p)
         return 0;
 
     char line[512];
-    int found = 0;
+    bool found = false;
 
     while (fgets(line, sizeof(line), p))
     {
         if (strstr(line, driver))
         {
-            found = 1;
+            found = true;
             break;
         }
     }
@@ -168,6 +175,7 @@ const char *mc_get_device_subsystem(const char *syspath)
     snprintf(link_path, sizeof(link_path), "%s/subsystem", syspath);
 
     ssize_t len = readlink(link_path, target, sizeof(target) - 1);
+    
     if (len == -1)
     {
         strcpy(subsystem, "unknown");
@@ -175,17 +183,22 @@ const char *mc_get_device_subsystem(const char *syspath)
     }
 
     target[len] = '\0';
+
     const char *bus_name = strrchr(target, '/');
-    if (bus_name)
-    {
-        strncpy(subsystem, bus_name + 1, 15);
-        subsystem[15] = '\0';
-    }
-    else
+    if (!bus_name)
     {
         strcpy(subsystem, "unknown");
+        return NULL;
     }
-
+    
+    size_t subsystem_len = strlen(bus_name) - strlen(syspath) - 1;
+    
+    if(subsystem_len > sizeof(subsystem) - 1)
+        return NULL;
+    
+    strncpy(subsystem, bus_name + 1, subsystem_len);
+    subsystem[subsystem_len] = '\0';
+        
     return subsystem;
 }
 
@@ -203,19 +216,13 @@ int mc_dev_has_driver(const char *syspath)
         return 0;
     }
 
-    /*
-     * If not found via parent, checks if "driver" link exists in syspath
-     * Simplified logic for demonstration.
-     */
-
     char driver_link[1024];
     snprintf(driver_link, sizeof(driver_link), "%s/driver", syspath);
 
     int has_driver = 0;
     if (access(driver_link, F_OK) == 0)
-    {
         has_driver = 1;
-    }
+    
 
     udev_device_unref(dev);
     udev_unref(udev);
@@ -254,6 +261,7 @@ int mc_list_all_devices(mc_device_info_t *out, int max)
 
         const char *path = udev_list_entry_get_name(dev_list_entry);
         struct udev_device *dev = udev_device_new_from_syspath(udev, path);
+        
         if (!dev)
             continue;
 
@@ -709,9 +717,8 @@ int mc_driver_is_in_use(const char *driver_name)
         closedir(holders_dir);
 
         if (has_holders)
-        {
             return 1; // Has dependent modules
-        }
+        
     }
 
     return 0;

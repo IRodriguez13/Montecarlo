@@ -16,9 +16,7 @@ int cache_save(const char *vendor, const char *product, const char *driver)
 
     time_t t = time(NULL);
 
-    fprintf(f,
-        "{ \"%s:%s\": { \"driver\": \"%s\", \"seen\": \"%ld\" } }\n",
-        vendor, product, driver, t);
+    fprintf(f,"{ \"%s:%s\": { \"driver\": \"%s\", \"seen\": \"%ld\" } }\n", vendor, product, driver, t);
 
     fclose(f);
     return 1;

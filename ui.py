@@ -6,7 +6,7 @@ import socket
 import json
 import threading
 import ctypes
-from ctypes import CDLL, c_int, c_char_p, c_char, POINTER, create_string_buffer, Structure
+from ctypes import CDLL, c_int, c_char_p, c_char, POINTER, create_string_buffer, Structure, cast
 import subprocess
 import webbrowser
 
@@ -98,6 +98,30 @@ libmc.mc_list_all_devices.restype = c_int
 libmc.mc_get_device_subsystem.argtypes = [c_char_p]
 libmc.mc_get_device_subsystem.restype = c_char_p
 
+# --- SYSTEMD TYPES ---
+
+class ServiceInfo(Structure):
+    _fields_ = [
+        ("name", c_char * 256),
+        ("description", c_char * 512),
+        ("state", c_char * 32),
+        ("sub_state", c_char * 32)
+    ]
+
+# Load Systemd Lib
+if os.environ.get("MONTECARLO_DEV"):
+    LIBSD_PATH = os.path.abspath("systemd/libsystemdctl.so")
+else:
+    LIBSD_PATH = "/usr/lib/libsystemdctl.so"
+
+try:
+    libsd = CDLL(LIBSD_PATH)
+    libsd.mc_list_services.argtypes = [POINTER(ServiceInfo), c_int]
+    libsd.mc_list_services.restype = c_int
+except OSError:
+    print(f"Warning: Could not load {LIBSD_PATH}. Services tab will be empty.")
+    libsd = None
+
 # --- UI CLASS ---
 
 class MontecarloUI(Gtk.Window):
@@ -140,14 +164,17 @@ class MontecarloUI(Gtk.Window):
         
         # --- TAB 2: AVAILABLE MODULES ---
         self.build_repository_tab()
+
+        # --- TAB 3: SERVICES ---
+        self.build_services_tab()
         
-        # --- TAB 3: TELEMETRY ---
+        # --- TAB 4: TELEMETRY ---
         self.build_telemetry_tab()
         
-        # --- TAB 4: RESTORE/HISTORY ---
+        # --- TAB 5: RESTORE/HISTORY ---
         self.build_restore_tab()
         
-        # --- TAB 5: ABOUT ---
+        # --- TAB 6: ABOUT ---
         self.build_about_tab()
         
         # Add header and notebook to a main vertical box
@@ -538,6 +565,232 @@ class MontecarloUI(Gtk.Window):
             dialog.destroy()
         except Exception as e:
             self.log(f"  -> Error: {e}", "red")
+
+    def build_services_tab(self):
+        self.svc_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.svc_box.set_border_width(10)
+
+        # Header
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        lbl = Gtk.Label(label="System Services", xalign=0)
+        lbl.get_style_context().add_class("title-3")
+        header.pack_start(lbl, False, False, 0)
+        
+        self.svc_spinner = Gtk.Spinner()
+        header.pack_end(self.svc_spinner, False, False, 0)
+        self.svc_box.pack_start(header, False, False, 0)
+
+        # Controls & Filter
+        control_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.svc_search = Gtk.SearchEntry()
+        self.svc_search.set_placeholder_text("Filter services...")
+        self.svc_search.connect("search-changed", self.on_svc_search_changed)
+        control_box.pack_start(self.svc_search, True, True, 0)
+        
+        btn_refresh = Gtk.Button(label="Refresh")
+        btn_refresh.set_image(Gtk.Image.new_from_icon_name("view-refresh", Gtk.IconSize.BUTTON))
+        btn_refresh.connect("clicked", self.refresh_services)
+        control_box.pack_start(btn_refresh, False, False, 0)
+        
+        self.svc_box.pack_start(control_box, False, False, 0)
+
+        # List / Details Split
+        paned = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
+        self.svc_box.pack_start(paned, True, True, 0)
+
+        # List
+        # Name, Description, State, SubState
+        self.svc_store = Gtk.ListStore(str, str, str, str)
+        self.svc_filter = self.svc_store.filter_new(None)
+        self.svc_filter.set_visible_func(self.svc_filter_func)
+        
+        self.svc_tree = Gtk.TreeView(model=self.svc_filter)
+        
+        # Cols
+        cols = [
+            ("Service", 0),
+            ("State", 2),
+            ("SubState", 3)
+        ]
+        
+        for title, idx in cols:
+            renderer = Gtk.CellRendererText()
+            col = Gtk.TreeViewColumn(title, renderer, text=idx)
+            if idx == 2: # Colorize state
+                col.set_cell_data_func(renderer, self.svc_state_color_func)
+            self.svc_tree.append_column(col)
+
+        self.svc_tree.get_selection().connect("changed", self.on_svc_selection_changed)
+        
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.add(self.svc_tree)
+        paned.pack1(scroll, resize=True, shrink=False)
+
+        # Details & Actions
+        frame = Gtk.Frame(label="Service Management")
+        details_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        details_box.set_border_width(10)
+        
+        self.lbl_svc_name = Gtk.Label(label="Select a service", xalign=0)
+        self.lbl_svc_desc = Gtk.Label(label="", xalign=0)
+        self.lbl_svc_desc.set_line_wrap(True)
+        
+        details_box.pack_start(self.lbl_svc_name, False, False, 0)
+        details_box.pack_start(self.lbl_svc_desc, False, False, 5)
+
+        # Action Buttons
+        action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        
+        self.btn_svc_start = Gtk.Button(label="Start")
+        self.btn_svc_stop = Gtk.Button(label="Stop")
+        self.btn_svc_enable = Gtk.Button(label="Enable")
+        self.btn_svc_disable = Gtk.Button(label="Disable")
+        
+        for btn in [self.btn_svc_start, self.btn_svc_stop, self.btn_svc_enable, self.btn_svc_disable]:
+            btn.set_sensitive(False)
+            action_box.pack_start(btn, True, True, 0)
+
+        self.btn_svc_start.connect("clicked", lambda x: self.on_service_action("start"))
+        self.btn_svc_stop.connect("clicked", lambda x: self.on_service_action("stop"))
+        self.btn_svc_enable.connect("clicked", lambda x: self.on_service_action("enable"))
+        self.btn_svc_disable.connect("clicked", lambda x: self.on_service_action("disable"))
+
+        # Destructive actions red
+        self.btn_svc_stop.get_style_context().add_class("destructive-action")
+        self.btn_svc_start.get_style_context().add_class("suggested-action")
+        
+        details_box.pack_start(action_box, False, False, 0)
+        frame.add(details_box)
+        paned.pack2(frame, resize=False, shrink=False)
+
+        self.notebook.append_page(self.svc_box, Gtk.Label(label="Services"))
+        
+        # Auto-load
+        if libsd:
+            GLib.timeout_add(1000, self.refresh_services)
+
+    def svc_state_color_func(self, col, cell, model, iter, data):
+        state = model[iter][2]
+        if state == "active":
+            cell.set_property("foreground", "green")
+        elif state == "failed":
+            cell.set_property("foreground", "red")
+        else:
+            cell.set_property("foreground", "gray")
+
+    def svc_filter_func(self, model, iter, data):
+        query = self.svc_search.get_text().lower()
+        if not query: return True
+        
+        name = model[iter][0].lower()
+        return query in name
+
+    def on_svc_search_changed(self, widget):
+        self.svc_filter.refilter()
+        
+    def refresh_services(self, widget=None):
+        if not libsd: return
+        if widget: self.svc_spinner.start()
+        
+        t = threading.Thread(target=self._refresh_svc_thread)
+        t.daemon = True
+        t.start()
+        
+    def _refresh_svc_thread(self):
+        max_svc = 500
+        ArrayType = ServiceInfo * max_svc
+        svc_array = ArrayType()
+        
+        count = libsd.mc_list_services(cast(svc_array, POINTER(ServiceInfo)), max_svc)
+        
+        new_rows = []
+        for i in range(count):
+            s = svc_array[i]
+            new_rows.append([
+                s.name.decode('utf-8', 'ignore'),
+                s.description.decode('utf-8', 'ignore'),
+                s.state.decode('utf-8', 'ignore'),
+                s.sub_state.decode('utf-8', 'ignore')
+            ])
+            
+        GLib.idle_add(self._update_svc_ui, new_rows)
+
+    def _update_svc_ui(self, rows):
+        # Only update if changed or empty? For now full refresh
+        # Preserve selection
+        sel = self.svc_tree.get_selection()
+        model, iter = sel.get_selected()
+        selected_name = model[iter][0] if iter else None
+        
+        self.svc_store.clear()
+        for r in rows:
+            self.svc_store.append(r)
+            
+        # Try restore selection
+        if selected_name:
+            for row in self.svc_store:
+                if row[0] == selected_name:
+                    # self.svc_tree.set_cursor(row.path) # Can be annoying if list jumps
+                    break
+
+        self.svc_spinner.stop()
+
+    def on_svc_selection_changed(self, selection):
+        model, iter = selection.get_selected()
+        if iter:
+            name = model[iter][0]
+            desc = model[iter][1]
+            state = model[iter][2]
+            
+            self.lbl_svc_name.set_markup(f"<b>{name}</b>")
+            self.lbl_svc_desc.set_text(desc)
+            
+            # Enable buttons
+            self.btn_svc_start.set_sensitive(True)
+            self.btn_svc_stop.set_sensitive(True)
+            self.btn_svc_enable.set_sensitive(True)
+            self.btn_svc_disable.set_sensitive(True)
+            
+            # Smart sensitivity
+            if state == "active":
+                self.btn_svc_start.set_sensitive(False)
+            else:
+                self.btn_svc_stop.set_sensitive(False)
+        else:
+            self.lbl_svc_name.set_text("Select a service")
+            self.lbl_svc_desc.set_text("")
+            self.btn_svc_start.set_sensitive(False)
+            self.btn_svc_stop.set_sensitive(False)
+            self.btn_svc_enable.set_sensitive(False)
+            self.btn_svc_disable.set_sensitive(False)
+
+    def on_service_action(self, action):
+        sel = self.svc_tree.get_selection()
+        model, iter = sel.get_selected()
+        if not iter: return
+        
+        service = model[iter][0]
+        self.log(f"Service Action: {action} {service}...", "bold")
+        
+        # PolicyKit execution
+        try:
+            result = subprocess.run(
+                ["pkexec", HELPER_PATH, "service", action, service],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if result.returncode == 0:
+                self.log(f"  -> Success: {service} {action}d", "green")
+                self.refresh_services()
+            else:
+                err = result.stderr.strip()
+                self.log(f"  -> Failed: {err}", "red")
+                
+        except Exception as e:
+            self.log(f"Error executing service action: {e}", "red")
 
     def get_loaded_modules_set(self):
         buf = create_string_buffer(4096 * 10) # 40kb buffer
