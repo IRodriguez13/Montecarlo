@@ -39,8 +39,8 @@ static void launch_ui(void)
             return;
         }
 
-        printf("[daemon] Launching UI in DEV mode (cwd)\n");
-        execlp("python3", "python3", "ui.py", NULL);
+        printf("[daemon] Launching UI in DEV mode (cwd/desktop)\n");
+        execlp("python3", "python3", "desktop/ui.py", NULL);
     }
 }
 

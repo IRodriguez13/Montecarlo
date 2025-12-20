@@ -50,11 +50,9 @@ $(TARGET_CLI): montecarlo/montecarlo.c montecarlo/cache.c $(TARGET_LIB) $(SYSTEM
 
 # -------- Helper (PolicyKit) --------
 # -------- Helper (PolicyKit) --------
-$(TARGET_HELPER): montecarlo/helper.c $(SYSTEMD_LIB_PATH)
-	$(CC) $(CFLAGS) -o $@ montecarlo/helper.c \
-	    -L$(SYSTEMD_DIR) -lsystemdctl \
-	    $(SYSTEMD_LIBS) \
-	    -Wl,-rpath=$(DESTDIR)$(LIBDIR):$(SYSTEMD_DIR)
+$(TARGET_HELPER): montecarlo/helper.c systemd/libsystemd.c
+	$(CC) $(CFLAGS) -o $@ montecarlo/helper.c systemd/libsystemd.c \
+	    $(SYSTEMD_LIBS)
 
 # -------- Dev build (with RPATH) --------
 dev: CFLAGS += -g
@@ -73,7 +71,7 @@ dev: clean $(SYSTEMD_LIB_PATH) $(TARGET_LIB) $(TARGET_HELPER)
 
 	@echo "Built for local development (RPATH set)."
 	@echo "Launching UI..."
-	MONTECARLO_DEV=1 python3 ui.py
+	MONTECARLO_DEV=1 python3 desktop/ui.py
 
 # -------- Install --------
 install: all
@@ -88,7 +86,7 @@ install: all
 	# Binaries
 	install -m 755 $(TARGET_DAEMON) $(DESTDIR)$(BINDIR)/$(TARGET_DAEMON)
 	install -m 755 $(TARGET_CLI) $(DESTDIR)$(BINDIR)/$(TARGET_CLI)
-	install -m 755 $(TARGET_HELPER) $(DESTDIR)$(BINDIR)/$(TARGET_HELPER)
+	install -m 4755 $(TARGET_HELPER) $(DESTDIR)$(BINDIR)/$(TARGET_HELPER) 
 
 	# Libraries
 	install -m 644 $(TARGET_LIB) $(DESTDIR)$(LIBDIR)/$(TARGET_LIB)
@@ -99,7 +97,7 @@ install: all
 	install -m 644 $(SYSTEMD_DIR)/libsystemdctl.h $(DESTDIR)$(INCLUDEDIR)/libsystemdctl.h
 
 	# UI
-	install -m 755 ui.py $(DESTDIR)$(SHAREDIR)/ui.py
+	install -m 755 desktop/ui.py $(DESTDIR)$(SHAREDIR)/ui.py
 
 	# Man pages
 	gzip -c man/montecarlo.1 > $(DESTDIR)$(MANDIR)/man1/montecarlo.1.gz
