@@ -69,11 +69,11 @@ graph TD
     end
 
     subgraph User Space
-        Daemon["Daemon Service<br>(C / Systemd)"]
+        Daemon["Daemon Service<br>(montecarlo-daemon)"]
         Socket(("Unix Socket<br>/tmp/montecarlo.sock"))
-        UI["User Interface<br>(Python / GTK)"]
-        Lib["Core Library<br>(montecarlo/libmontecarlo.so)"]
-        Helper["Privileged Helper<br>(montecarlo/helper)"]
+        UI["User Interface<br>(desktop/ui.py)"]
+        Lib["Core Library<br>(libmontecarlo.so)"]
+        Helper["Privileged Helper<br>(montecarlo-helper)"]
         LibSD["Systemd Wrapper<br>(systemd/libsystemdctl.so)"]
     end
 
@@ -83,7 +83,7 @@ graph TD
     UI -->|Connects| Socket
     UI -->|Read Info| Lib
     UI -->|List Services| LibSD
-    UI -.->|Pkexec (Root)| Helper
+    UI -.->|"Pkexec (Root)"| Helper
     Helper -->|Links| LibSD
     LibSD -->|D-Bus| Systemd
     Lib -->|modprobe / rmmod| Drivers
