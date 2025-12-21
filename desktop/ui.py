@@ -18,7 +18,7 @@ from gi.repository import Gtk, GLib, Pango, Notify, Gdk
 # --- CONFIG & LIBS ---
 
 # Version
-MONTECARLO_VERSION = "0.4.0"
+MONTECARLO_VERSION = "0.5.0"
 
 # Socket Path (same logic as daemon)
 def get_socket_path():
@@ -1207,79 +1207,71 @@ class MontecarloUI(Gtk.Window):
         content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=15)
         content_box.set_border_width(10)
         
-        # Section 1: What is a driver?
+        # Section 1: Overview
         section1_title = Gtk.Label()
-        section1_title.set_markup("<b>❓ What is a driver?</b>")
+        section1_title.set_markup("<b>🛡️ System Overview</b>")
         section1_title.set_xalign(0)
         content_box.pack_start(section1_title, False, False, 0)
         
         section1_text = Gtk.Label(
-            label="A driver is a piece of software that allows your operating system to communicate "
-                  "with hardware devices. Without the correct driver, your USB device might not work at all.\n\n"
-                  "Linux drivers are called 'kernel modules' and are stored in /lib/modules/."
+            label="Montecarlo is a utility for managing Linux kernel modules and system services.\n\n"
+                  "Its primary function is to facilitate the safe loading and unloading of device drivers (kernel modules) "
+                  "while enforcing dependency checks to prevent system instability."
         )
+        section1_text.set_use_markup(True)
         section1_text.set_selectable(True)
         section1_text.set_can_focus(False)
         section1_text.set_line_wrap(True)
         section1_text.set_xalign(0)
         content_box.pack_start(section1_text, False, False, 0)
         
-        # Section 2: When to use Montecarlo
+        # Section 2: Core Functions
         section2_title = Gtk.Label()
-        section2_title.set_markup("<b>🔌 When should I use Montecarlo?</b>")
+        section2_title.set_markup("<b>⚡ Core Functions</b>")
         section2_title.set_xalign(0)
         content_box.pack_start(section2_title, False, False, 0)
         
         section2_text = Gtk.Label(
-            label="Use Montecarlo when:\n"
-                  "  • You connect a USB device and it doesn't work\n"
-                  "  • You see an 'Unknown device' in your system\n"
-                  "  • You need to test different drivers for generic USB chips\n"
-                  "  • You want to safely unload unused drivers\n\n"
-                  "Montecarlo automatically detects devices without drivers and helps you find the right module."
+            label="• <b>Dashboard:</b> View active USB subsystems and driver bindings.\n"
+                  "• <b>Repository:</b> Browse and load modules from the kernel's library.\n"
+                  "• <b>Safety:</b> Prevents unloading of drivers currently in use by hardware."
         )
+        section2_text.set_use_markup(True)
         section2_text.set_selectable(True)
         section2_text.set_can_focus(False)
         section2_text.set_line_wrap(True)
         section2_text.set_xalign(0)
         content_box.pack_start(section2_text, False, False, 0)
-        
-        # Section 3: How to use
+
+        # Section 3: Service Management (Explicit Section)
         section3_title = Gtk.Label()
-        section3_title.set_markup("<b>📖 How to use Montecarlo</b>")
+        section3_title.set_markup("<b>⚙️ System Services</b>")
         section3_title.set_xalign(0)
         content_box.pack_start(section3_title, False, False, 0)
         
         section3_text = Gtk.Label(
-            label="1. Dashboard Tab: View all connected USB devices and their current drivers\n"
-                  "2. Available Modules Tab: Browse and load drivers from your system\n"
-                  "3. Connect a device: Montecarlo will notify you if it needs a driver\n"
-                  "4. Load a driver: Select it from the list and click 'Load Module'\n"
-                  "5. Authentication: You'll be asked for your password (via PolicyKit)\n\n"
-                  "Safety Features:\n"
-                  "  • Can't unload drivers in active use\n"
-                  "  • Warns you before dangerous operations\n"
-                  "  • Restores removed drivers if needed"
+            label="Montecarlo integrates directly with systemd to manage background services.\n\n"
+                  "You can <b>Start</b>, <b>Stop</b>, <b>Enable</b>, or <b>Disable</b> services from the dashboard. "
+                  "This operation is privileged and will require authentication via PolicyKit."
         )
+        section3_text.set_use_markup(True)
         section3_text.set_selectable(True)
         section3_text.set_can_focus(False)
         section3_text.set_line_wrap(True)
         section3_text.set_xalign(0)
         content_box.pack_start(section3_text, False, False, 0)
         
-        # Section 4: Tips
+        # Section 4: Recovery
         section4_title = Gtk.Label()
-        section4_title.set_markup("<b>💡 Pro Tips</b>")
+        section4_title.set_markup("<b>↩️ Restore</b>")
         section4_title.set_xalign(0)
         content_box.pack_start(section4_title, False, False, 0)
         
         section4_text = Gtk.Label(
-            label="• Use the search box to filter modules by name\n"
-                  "• Click 'Search on Web' to find more info about a driver\n"
-                  "• Module descriptions show what each driver is for\n"
-                  "• Check the Telemetry tab to see what Montecarlo is doing\n"
-                  "• Visit the Restore tab to reload previously removed drivers"
+            label="The <b>Restore</b> tab keeps a history of actions within the current session.\n"
+                  "Use it to quickly reload unloaded drivers or restart stopped services."
         )
+        section4_text.set_use_markup(True)
         section4_text.set_selectable(True)
         section4_text.set_can_focus(False)
         section4_text.set_line_wrap(True)

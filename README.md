@@ -1,22 +1,37 @@
 # Montecarlo Driver Manager
 
-Montecarlo is an advanced, automated driver management tool for Linux. It abstracts the complexity of kernel modules, allowing users to probe, load, and manage USB drivers safely and efficiently.
+Montecarlo is a system utility designed for the management of Linux kernel modules and system services. It provides a unified interface to probe, load, and unload device drivers, incorporating safety protocols to prevent system instability.
 
-It is designed to detect devices without drivers and help users find the correct module, while actively preventing system instability through rigorous safety checks.
+The tool focuses on stability and transparency, helping users detect driverless devices and manage system resources without the risk of accidental module unloading or dependency bloat.
 
 ---
 
-## Key Features
+## Key Capabilities
 
 ### 🛡️ Active Safety System
-Montecarlo prioritizes system stability.
-*   **Dependency Protection**: Before unloading a module, it checks for dependent modules (holders) and blocks the action if it would break other drivers.
-*   **Hardware Locking**: It detects if a driver is currently controlling active hardware (e.g., your mouse or keyboard) and prevents accidental unloading.
+Montecarlo enforces stability through a multi-layer safety engine:
+*   **Dependency Protection**: Prevents the unloading of modules that are dependencies for other active drivers.
+*   **Hardware Locking**: active hardware detection prevents the accidental unloading of drivers currently in use by peripheral devices.
 
-### 🧠 Smart Dashboard
-The dashboard provides a clean, noise-free view of your system.
-*   **Intelligent Filtering**: Automatically hides internal kernel dependencies, showing only the "Root Modules" that you actually installed or loaded.
-*   **Status Indicators**: Clearly marks drivers as `(In Use)` or `(Idle)` with distinct icons.
+### 🧠 Intelligent Filtering
+The dashboard eliminates kernel noise to focus on relevant system components:
+*   **Root Module Isolation**: Automatically filters internal kernel dependencies, displaying only user-relevant "Root Modules".
+*   **Status Indicators**: Real-time status flags distinguish between `(In Use)` and `(Idle)` drivers, verified against hardware bindings.
+
+### ⚙️ System Services Manager
+Integrated systemd management allows for seamless control of background services directly from the driver dashboard:
+*   **Privileged Control**: Authenticated Start, Stop, Enable, and Disable operations via PolicyKit.
+*   **State Awareness**: Instant visual feedback on service health and runtime status.
+
+### 🔍 Telemetry & Audit
+Complete operational transparency is maintained through real-time auditing:
+*   **Decision Logging**: Every decision made by the daemon—from device detection to driver verification—is logged.
+*   **Event Tracing**: Trace the complete lifecycle of device events and driver interactions.
+
+### ↩️ State Restoration
+Montecarlo maintains a session-based history of all administrative actions:
+*   **Driver Reloading**: Quickly restore accidentally unloaded modules.
+*   **Service Recovery**: Restart services that were stopped during the current session.
 
 ---
 
