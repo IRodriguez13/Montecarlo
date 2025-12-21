@@ -6,7 +6,12 @@ import ctypes
 import sys
 
 # Load library
-lib = ctypes.CDLL('./libmontecarlo.so')
+import os
+
+# Load library
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LIB_PATH = os.path.join(BASE_DIR, "libmontecarlo.so")
+lib = ctypes.CDLL(LIB_PATH)
 
 # Define device info struct
 class DeviceInfo(ctypes.Structure):

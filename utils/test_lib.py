@@ -3,7 +3,11 @@ import os
 import sys
 
 try:
-    lib = ctypes.CDLL(os.path.abspath("./libmontecarlo.so"))
+
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    LIB_PATH = os.path.join(BASE_DIR, "libmontecarlo.so")
+    
+    lib = ctypes.CDLL(LIB_PATH)
     print("Library loaded successfully.")
     
     # Test mc_list_candidate_drivers

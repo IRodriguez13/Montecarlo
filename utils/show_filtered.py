@@ -17,7 +17,10 @@ print(f"🔍 Total PCI devices in system: {len(all_pci)}")
 # Get devices shown by Montecarlo
 import ctypes
 
-lib = ctypes.CDLL('./libmontecarlo.so')
+import os
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LIB_PATH = os.path.join(BASE_DIR, "libmontecarlo.so")
+lib = ctypes.CDLL(LIB_PATH)
 
 class DeviceInfo(ctypes.Structure):
     _fields_ = [

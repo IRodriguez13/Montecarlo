@@ -212,6 +212,11 @@ class MontecarloUI(Gtk.Window):
         except Exception as e:
             print(f"Failed to write PID file: {e}")
 
+    def copy_to_clipboard(self, text):
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        clipboard.set_text(text, -1)
+        self.log(f"Copied to clipboard: {text}")
+
     def show_device_notification(self, syspath):
         """Show desktop notification when driverless device is detected."""
         # Extract device name/ID if possible (simplified)
@@ -291,6 +296,8 @@ class MontecarloUI(Gtk.Window):
         self.repo_box.pack_start(header, False, False, 0)
         
         desc = Gtk.Label(label="Available kernel modules for your system.", xalign=0)
+        desc.set_selectable(True)
+        desc.set_can_focus(False)
         self.repo_box.pack_start(desc, False, False, 0)
         
         # Filter Controls Box
@@ -357,7 +364,11 @@ class MontecarloUI(Gtk.Window):
         self.repo_details_box.set_border_width(10)
         
         self.lbl_repo_module_name = Gtk.Label(label="Select a module to view details.", xalign=0)
+        self.lbl_repo_module_name.set_selectable(True)
+        self.lbl_repo_module_name.set_can_focus(False)
         self.lbl_repo_module_desc = Gtk.Label(label="", xalign=0)
+        self.lbl_repo_module_desc.set_selectable(True)
+        self.lbl_repo_module_desc.set_can_focus(False)
         self.lbl_repo_module_desc.set_line_wrap(True)
         
         self.btn_repo_web_search = Gtk.Button(label="Search on Web")
@@ -368,7 +379,17 @@ class MontecarloUI(Gtk.Window):
         
         self.repo_details_box.pack_start(self.lbl_repo_module_name, False, False, 0)
         self.repo_details_box.pack_start(self.lbl_repo_module_desc, False, False, 0)
-        self.repo_details_box.pack_start(self.btn_repo_web_search, False, False, 5)
+        
+        # Helper buttons box
+        hlp_box = Gtk.Box(spacing=5)
+        self.repo_details_box.pack_start(hlp_box, False, False, 5)
+        
+        hlp_box.pack_start(self.btn_repo_web_search, False, False, 0)
+        
+        self.btn_repo_copy = Gtk.Button(label="Copy Name")
+        self.btn_repo_copy.set_sensitive(False)
+        self.btn_repo_copy.connect("clicked", self.on_repo_copy_clicked)
+        hlp_box.pack_start(self.btn_repo_copy, False, False, 0)
         
         frame_details.add(self.repo_details_box)
         paned.pack2(frame_details, resize=False, shrink=False)
@@ -477,6 +498,7 @@ class MontecarloUI(Gtk.Window):
         if treeiter:
             self.btn_repo_load.set_sensitive(True)
             self.btn_repo_web_search.set_sensitive(True)
+            self.btn_repo_copy.set_sensitive(True)
             
             # Update Details
             module_name = model[treeiter][0]
@@ -498,6 +520,7 @@ class MontecarloUI(Gtk.Window):
         else:
             self.btn_repo_load.set_sensitive(False)
             self.btn_repo_web_search.set_sensitive(False)
+            self.btn_repo_copy.set_sensitive(False)
             self.lbl_repo_module_name.set_text("Select a module to view details.")
             self.lbl_repo_module_desc.set_text("")
     
@@ -632,11 +655,22 @@ class MontecarloUI(Gtk.Window):
         details_box.set_border_width(10)
         
         self.lbl_svc_name = Gtk.Label(label="Select a service", xalign=0)
+        self.lbl_svc_name.set_selectable(True)
+        self.lbl_svc_name.set_can_focus(False)
         self.lbl_svc_desc = Gtk.Label(label="", xalign=0)
+        self.lbl_svc_desc.set_selectable(True)
+        self.lbl_svc_desc.set_can_focus(False)
         self.lbl_svc_desc.set_line_wrap(True)
         
         details_box.pack_start(self.lbl_svc_name, False, False, 0)
         details_box.pack_start(self.lbl_svc_desc, False, False, 5)
+
+        # Copy btn
+        self.btn_svc_copy = Gtk.Button(label="Copy Name")
+        self.btn_svc_copy.set_sensitive(False)
+        self.btn_svc_copy.set_halign(Gtk.Align.START)
+        self.btn_svc_copy.connect("clicked", self.on_svc_copy_clicked)
+        details_box.pack_start(self.btn_svc_copy, False, False, 5)
 
         # Action Buttons
         action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
@@ -750,6 +784,7 @@ class MontecarloUI(Gtk.Window):
             self.btn_svc_stop.set_sensitive(True)
             self.btn_svc_enable.set_sensitive(True)
             self.btn_svc_disable.set_sensitive(True)
+            self.btn_svc_copy.set_sensitive(True)
             
             # Smart sensitivity
             if state == "active":
@@ -763,6 +798,7 @@ class MontecarloUI(Gtk.Window):
             self.btn_svc_stop.set_sensitive(False)
             self.btn_svc_enable.set_sensitive(False)
             self.btn_svc_disable.set_sensitive(False)
+            self.btn_svc_copy.set_sensitive(False)
 
     def on_service_action(self, action):
         sel = self.svc_tree.get_selection()
@@ -800,6 +836,20 @@ class MontecarloUI(Gtk.Window):
                 
         except Exception as e:
             self.log(f"Error executing service action: {e}", "red")
+
+    def on_svc_copy_clicked(self, widget):
+        sel = self.svc_tree.get_selection()
+        model, iter = sel.get_selected()
+        if iter:
+            name = model[iter][0]
+            self.copy_to_clipboard(name)
+
+    def on_repo_copy_clicked(self, widget):
+        selection = self.repo_tree.get_selection()
+        model, treeiter = selection.get_selected()
+        if treeiter:
+            name = model[treeiter][0]
+            self.copy_to_clipboard(name)
 
     def get_loaded_modules_set(self):
         buf = create_string_buffer(4096 * 10) # 40kb buffer
@@ -878,9 +928,17 @@ class MontecarloUI(Gtk.Window):
         self.details_box.set_border_width(10)
         
         self.lbl_detail_name = Gtk.Label(label="Select a device to view details.", xalign=0)
+        self.lbl_detail_name.set_selectable(True)
+        self.lbl_detail_name.set_can_focus(False)
         self.lbl_detail_id = Gtk.Label(label="", xalign=0)
+        self.lbl_detail_id.set_selectable(True)
+        self.lbl_detail_id.set_can_focus(False)
         self.lbl_detail_path = Gtk.Label(label="", xalign=0)
+        self.lbl_detail_path.set_selectable(True)
+        self.lbl_detail_path.set_can_focus(False)
         self.lbl_detail_desc = Gtk.Label(label="", xalign=0) # New Description Label
+        self.lbl_detail_desc.set_selectable(True)
+        self.lbl_detail_desc.set_can_focus(False)
         self.lbl_detail_desc.set_line_wrap(True)
 
         self.btn_web_search = Gtk.Button(label="Search on Web")
@@ -1093,6 +1151,8 @@ class MontecarloUI(Gtk.Window):
             f"Version: {MONTECARLO_VERSION}"
         )
         desc = Gtk.Label(label=desc_txt)
+        desc.set_selectable(True)
+        desc.set_can_focus(False)
         desc.set_justify(Gtk.Justification.CENTER)
         vbox.pack_start(desc, False, False, 0)
         
@@ -1158,6 +1218,8 @@ class MontecarloUI(Gtk.Window):
                   "with hardware devices. Without the correct driver, your USB device might not work at all.\n\n"
                   "Linux drivers are called 'kernel modules' and are stored in /lib/modules/."
         )
+        section1_text.set_selectable(True)
+        section1_text.set_can_focus(False)
         section1_text.set_line_wrap(True)
         section1_text.set_xalign(0)
         content_box.pack_start(section1_text, False, False, 0)
@@ -1176,6 +1238,8 @@ class MontecarloUI(Gtk.Window):
                   "  • You want to safely unload unused drivers\n\n"
                   "Montecarlo automatically detects devices without drivers and helps you find the right module."
         )
+        section2_text.set_selectable(True)
+        section2_text.set_can_focus(False)
         section2_text.set_line_wrap(True)
         section2_text.set_xalign(0)
         content_box.pack_start(section2_text, False, False, 0)
@@ -1197,6 +1261,8 @@ class MontecarloUI(Gtk.Window):
                   "  • Warns you before dangerous operations\n"
                   "  • Restores removed drivers if needed"
         )
+        section3_text.set_selectable(True)
+        section3_text.set_can_focus(False)
         section3_text.set_line_wrap(True)
         section3_text.set_xalign(0)
         content_box.pack_start(section3_text, False, False, 0)
@@ -1214,6 +1280,8 @@ class MontecarloUI(Gtk.Window):
                   "• Check the Telemetry tab to see what Montecarlo is doing\n"
                   "• Visit the Restore tab to reload previously removed drivers"
         )
+        section4_text.set_selectable(True)
+        section4_text.set_can_focus(False)
         section4_text.set_line_wrap(True)
         section4_text.set_xalign(0)
         content_box.pack_start(section4_text, False, False, 0)
@@ -1240,8 +1308,9 @@ class MontecarloUI(Gtk.Window):
             else:
                 self.log_buf.insert(end, text + "\n")
                 
-            adj = self.log_view.get_vadjustment()
-            adj.set_value(adj.get_upper() - adj.get_page_size())
+            # Scroll to end using mark (avoids get_vadjustment deprecation)
+            mark = self.log_buf.get_insert()
+            self.log_view.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
         
         GLib.idle_add(_log)
 
